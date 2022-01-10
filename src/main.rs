@@ -66,6 +66,26 @@ impl EventHandler for Handler {
 		println!("{} is connected!", ready.user.name);
 	}
 
+	async fn reaction_add(&self, ctx: Context, reaction: Reaction) {
+		let channel_id = reaction.channel_id;
+		let message_id = reaction.message_id;
+		let message = match channel_id.message(&ctx.http, message_id).await {
+			Ok(m) => m,
+			Err(why) => {
+				println!("Couldn't fetch message: {:#?}", why);
+				return
+			},
+		};
+		let data = ctx.data.read().await;
+		let map = data.get::<ButtplugMap>().expect("Expected buttplug map");
+		let victim = &message.author.id;
+		let client = match map.get(victim) {
+			Some(c) => c,
+			None => return,
+		};
+		vibrate_all(client).await;
+	}
+
 	async fn message(&self, ctx: Context, msg: Message) {
 		if GOOD_GIRL_REGEX.is_match(&msg.content) {
 			let victims = msg.mentions.iter();
@@ -150,6 +170,7 @@ async fn join(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
         return Ok(());
     };
     let ip = format!("ws://{}", arg);
+		println!("Connecting to {}", ip);
     let connector = ButtplugRemoteClientConnector::<
             ButtplugWebsocketClientTransport,
             ButtplugClientJSONSerializer,
@@ -159,7 +180,7 @@ async fn join(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
 
     let client = ButtplugClient::new("Euphoria bot");
     if let Err(why) = client.connect(connector).await {
-        println!("Couldn't connect: {:?}", why);
+        println!("Couldn't connect: {:#?}", why);
         msg.channel_id.say(ctx, "I couldn't connect with you ~w~").await.ok();
         return Ok(());
     }
