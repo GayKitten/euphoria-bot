@@ -228,24 +228,24 @@ async fn please(ctx: &Context, msg: &Message) -> CommandResult {
 		.iter().next()
 		.unwrap_or(&msg.author);
 	
-    let mut data = ctx.data.write().await;
-    let map = data.get_mut::<ButtplugMap>().unwrap();
-    let client = match map.get(&victim.id) {
-        Some(c) => c,
-        None => {
-						let content = {
-							if victim.id == msg.author.id {String::from("You're not connected!")}
-							else {format!("{} isn't connected!", victim.name)}
-						};
-            msg.channel_id.say(ctx, content).await.ok();
-            return Ok(());
-        }
-    };
-    let devices = client.devices();
-    let cmds = devices.iter().map(|d| d.vibrate(VibrateCommand::Speed(1.0)));
-    futures::future::join_all(cmds).await;
-    msg.channel_id.say(ctx, "brrr~~").await.ok();
-		tokio::time::sleep(Duration::from_secs(1)).await;
-		client.stop_all_devices().await;
-    Ok(())
+	let mut data = ctx.data.write().await;
+	let map = data.get_mut::<ButtplugMap>().unwrap();
+	let client = match map.get(&victim.id) {
+		Some(c) => c,
+		None => {
+			let content = {
+				if victim.id == msg.author.id {String::from("You're not connected!")}
+				else {format!("{} isn't connected!", victim.name)}
+			};
+			msg.channel_id.say(ctx, content).await.ok();
+			return Ok(());
+		}
+	};
+	let devices = client.devices();
+	let cmds = devices.iter().map(|d| d.vibrate(VibrateCommand::Speed(1.0)));
+	futures::future::join_all(cmds).await;
+	msg.channel_id.say(ctx, "brrr~~").await.ok();
+	tokio::time::sleep(Duration::from_secs(1)).await;
+	client.stop_all_devices().await;
+	Ok(())
 }

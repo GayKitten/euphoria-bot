@@ -1,6 +1,2 @@
 /target
-<<<<<<< HEAD
 .env
-=======
-.env
->>>>>>> 7ef9a67 (Added dotenv and response on flirting)
