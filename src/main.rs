@@ -3,11 +3,12 @@ use std::env;
 use std::fs;
 
 use regex::Regex;
+#[macro_use]
+extern crate lazy_static;
 
 use buttplug::{
     client::{
         ButtplugClient,
-        ButtplugClientEvent,
         device::VibrateCommand,
     },
     connector::{ButtplugRemoteClientConnector, ButtplugWebsocketClientTransport},
@@ -21,23 +22,18 @@ use serenity::{
         Client, Context, EventHandler,
     },
     model::{
-        user::User,
         id::UserId,
         channel::{
-        Message, EmbedField
+        Message,
         }
     },
     framework::standard::{
-        Args, CommandOptions, CommandResult, CommandGroup, StandardFramework,
+        Args, CommandResult, StandardFramework,
         macros::{
             command, group
         }
     },
-    utils::Colour
 };
-
-mod database;
-mod session;
 
 #[group]
 #[commands(join, leave, stop, please)]
@@ -71,7 +67,6 @@ async fn main() {
     let token = fs::read_to_string(args.next().expect("Need two arguments!"))
         .expect("Couldn't read file!");
 
-    let db_path = args.next().expect("Need two arguments!");
 
     // Login with a bot token
     let mut client = Client::builder(token)
@@ -83,7 +78,6 @@ async fn main() {
     {
         let mut data = client.data.write().await;
         data.insert::<ButtplugMap>(HashMap::default());
-        data.insert::<DatabasePath>(db_path);
     }
 
     // start listening for events by starting a single shard
@@ -92,11 +86,14 @@ async fn main() {
     }
 }
 
+lazy_static! {
+    static ref web_socket_regex : Regex = Regex::new(
+        r"((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9]):\d{5}"
+    ).unwrap();
+}
+
 #[command]
 async fn join(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
-    let ws_regex = Regex::new(
-            r"((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9]):\d{5}"
-        ).unwrap();
     let arg = match args.single::<String>() {
         Ok(a) => a,
         Err(_) => {
@@ -104,7 +101,7 @@ async fn join(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
             return Ok(());
         }
     };
-    if !ws_regex.is_match(&arg) {
+    if !web_socket_regex.is_match(&arg) {
         msg.channel_id.say(ctx, "Hmm, What you sent doesn't look like an IP...").await;
         return Ok(());
     };
