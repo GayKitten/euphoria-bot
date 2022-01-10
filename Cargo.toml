@@ -8,8 +8,10 @@ edition = "2018"
 
 [dependencies]
 buttplug = "3.0"
-serenity = { version = "0.10.4", features = ["collector"] }
+serenity = { version = "0.10.9", features = ["collector"] }
 tokio = { version = "1.5", features = ["macros"] }
 futures = "0.3.14"
 regex = "1.4.5"
 lazy_static = "1.4.0"
+dotenv = "0.15.0"
+color-eyre = "0.5.11"

@@ -1,10 +1,13 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Duration};
 use std::env;
-use std::fs;
 
 use regex::Regex;
 #[macro_use]
 extern crate lazy_static;
+
+use color_eyre::Result;
+
+use dotenv::dotenv;
 
 use buttplug::{
     client::{
@@ -22,10 +25,11 @@ use serenity::{
         Client, Context, EventHandler,
     },
     model::{
+				prelude::*,
         id::UserId,
         channel::{
         Message,
-        }
+        },
     },
     framework::standard::{
         Args, CommandResult, StandardFramework,
@@ -41,8 +45,39 @@ struct General;
 
 struct Handler;
 
+lazy_static!{
+	static ref GOOD_GIRL_REGEX: Regex = Regex::new(
+		"(?i)good (?:girl|kitt(?:y|en))"
+	).unwrap();
+}
+
+async fn vibrate_all(client: &ButtplugClient) {
+	let devices = client.devices();
+	let cmds = devices.iter()
+		.map(|d| d.vibrate(VibrateCommand::Speed(1.0))).collect::<Vec<_>>();
+	futures::future::join_all(cmds).await;
+	tokio::time::sleep(Duration::from_secs(1)).await;
+	client.stop_all_devices().await;
+}
+
 #[async_trait]
-impl EventHandler for Handler {}
+impl EventHandler for Handler {
+	async fn ready(&self, _ctx: Context, ready: Ready) {
+		println!("{} is connected!", ready.user.name);
+	}
+
+	async fn message(&self, ctx: Context, msg: Message) {
+		if GOOD_GIRL_REGEX.is_match(&msg.content) {
+			let victims = msg.mentions.iter();
+			let data = ctx.data.read().await;
+			let map = data.get::<ButtplugMap>().expect("Expected buttplug map");
+			let fut = victims
+				.filter_map(|v| map.get(&v.id))
+				.map(|client| vibrate_all(client));
+				futures::future::join_all(fut).await;
+		}
+	}
+}
 
 struct ButtplugMap;
 
@@ -56,34 +91,43 @@ impl TypeMapKey for DatabasePath {
     type Value = String;
 }
 
-#[tokio::main]
-async fn main() {
-    let framework = StandardFramework::new()
-        .configure(|c| c.prefix("a!")) // set the bot's prefix to "a!"
-        .group(&GENERAL_GROUP);
+fn main() -> Result<()> {
+	color_eyre::install()?;
 
-    // Get token from file
-    let mut args = env::args().collect::<Vec<String>>().into_iter();
-    let token = fs::read_to_string(args.next().expect("Need two arguments!"))
-        .expect("Couldn't read file!");
+	dotenv().ok();
 
+	let framework = StandardFramework::new()
+		.configure(|c| c.prefix("a!")) // set the bot's prefix to "a!"
+		.group(&GENERAL_GROUP);
 
-    // Login with a bot token
-    let mut client = Client::builder(token)
-        .event_handler(Handler)
-        .framework(framework)
-        .await
-        .expect("Error creating client");
+	let token = env::var("DISCORD_TOKEN").expect("No discord token");
 
-    {
-        let mut data = client.data.write().await;
-        data.insert::<ButtplugMap>(HashMap::default());
-    }
+	println!("token: {:?}", token);
 
-    // start listening for events by starting a single shard
-    if let Err(why) = client.start().await {
-        println!("An error occurred while running the client: {:?}", why);
-    }
+	let rt = tokio::runtime::Builder::new_multi_thread()
+		.worker_threads(8).enable_all()
+		.build().expect("Couldn't start runtime");
+
+	rt.block_on(async move {
+		// Login with a bot token
+		let mut client = Client::builder(token)
+			.event_handler(Handler)
+			.framework(framework)
+			.await
+			.expect("Error creating client");
+
+		{
+			let mut data = client.data.write().await;
+			data.insert::<ButtplugMap>(HashMap::default());
+		}
+
+		// start listening for events by starting a single shard
+		if let Err(why) = client.start().await {
+			println!("An error occurred while running the client: {:?}", why);
+		}
+	});
+
+	Ok(())
 }
 
 lazy_static! {
@@ -97,12 +141,12 @@ async fn join(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
     let arg = match args.single::<String>() {
         Ok(a) => a,
         Err(_) => {
-            msg.channel_id.say(ctx, "You forgot to give an IP for me to connect to!").await;
+            msg.channel_id.say(ctx, "You forgot to give an IP for me to connect to!").await.ok();
             return Ok(());
         }
     };
     if !web_socket_regex.is_match(&arg) {
-        msg.channel_id.say(ctx, "Hmm, What you sent doesn't look like an IP...").await;
+        msg.channel_id.say(ctx, "Hmm, What you sent doesn't look like an IP...").await.ok();
         return Ok(());
     };
     let ip = format!("ws://{}", arg);
@@ -116,15 +160,15 @@ async fn join(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
     let client = ButtplugClient::new("Euphoria bot");
     if let Err(why) = client.connect(connector).await {
         println!("Couldn't connect: {:?}", why);
-        msg.channel_id.say(ctx, "I couldn't connect with you ~w~").await;
+        msg.channel_id.say(ctx, "I couldn't connect with you ~w~").await.ok();
         return Ok(());
     }
-    client.start_scanning().await;
+    client.start_scanning().await.ok();
     let mut data = ctx.data.write().await;
     let map = data.get_mut::<ButtplugMap>().unwrap();
     map.insert(msg.author.id, client);
 
-    msg.channel_id.say(ctx, "I got connected!").await;
+    msg.channel_id.say(ctx, "I got connected!").await.ok();
     Ok(())
 }
 
@@ -135,15 +179,15 @@ async fn leave(ctx: &Context, msg: &Message) -> CommandResult {
     let client = match map.remove(&msg.author.id) {
         Some(c) => c,
         None => {
-            msg.channel_id.say(ctx, "You're not connected!").await;
+            msg.channel_id.say(ctx, "You're not connected!").await.ok();
             return Ok(());
         }
     };
-    client.stop_all_devices().await;
+    client.stop_all_devices().await.ok();
     if let Err(why) = client.disconnect().await {
         println!("Couldn't disconnect: {:?}", why);
     };
-    msg.channel_id.say(ctx, "You have been disconnected :3").await;
+    msg.channel_id.say(ctx, "You have been disconnected :3").await.ok();
     Ok(())
 }
 
@@ -152,25 +196,35 @@ async fn stop(ctx: &Context, msg: &Message) -> CommandResult {
     let mut data = ctx.data.write().await;
     let map = data.get_mut::<ButtplugMap>().unwrap();
     if let Some(c) =  map.get(&msg.author.id) {
-        c.stop_all_devices().await;
+        c.stop_all_devices().await.ok();
     };
     Ok(())
 }
 
 #[command]
 async fn please(ctx: &Context, msg: &Message) -> CommandResult {
+	let victim = msg.mentions
+		.iter().next()
+		.unwrap_or(&msg.author);
+	
     let mut data = ctx.data.write().await;
     let map = data.get_mut::<ButtplugMap>().unwrap();
-    let client = match map.get(&msg.author.id) {
+    let client = match map.get(&victim.id) {
         Some(c) => c,
         None => {
-            msg.channel_id.say(ctx, "You're not connected!!!").await;
+						let content = {
+							if victim.id == msg.author.id {String::from("You're not connected!")}
+							else {format!("{} isn't connected!", victim.name)}
+						};
+            msg.channel_id.say(ctx, content).await.ok();
             return Ok(());
         }
     };
     let devices = client.devices();
-    let cmds = devices.iter().map(|d| d.vibrate(VibrateCommand::Speed(1.0))).collect::<Vec<_>>();
+    let cmds = devices.iter().map(|d| d.vibrate(VibrateCommand::Speed(1.0)));
     futures::future::join_all(cmds).await;
-    msg.channel_id.say(ctx, "brrr~~").await;
+    msg.channel_id.say(ctx, "brrr~~").await.ok();
+		tokio::time::sleep(Duration::from_secs(1)).await;
+		client.stop_all_devices().await;
     Ok(())
 }
