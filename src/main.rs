@@ -40,15 +40,17 @@ use serenity::{
     },
 };
 
+use rusqlite::Connection;
+
 #[group]
-#[commands(ping, join, leave, stop, decay)]
+#[commands(ping, join, leave, stop, decay, settings)]
 struct General;
 
 struct Handler;
 
 lazy_static!{
 	static ref GOOD_GIRL_REGEX: Regex = Regex::new(
-		"(?i)good (?:girl|kitt(?:y|en))"
+		"(?i)(?:good (?:girl|kitt(?:y|en))|treat|reward|praise)"
 	).unwrap();
 }
 
@@ -80,7 +82,7 @@ impl EventHandler for Handler {
 	}
 
 	async fn message(&self, ctx: Context, msg: Message) {
-		if GOOD_GIRL_REGEX.is_match(&msg.content) {
+		if msg.mentions.len() != 0 && GOOD_GIRL_REGEX.is_match(&msg.content) {
 			let data = ctx.data.read().await;
 			let settings = *data.get::<PowerSettingsKey>().expect("Expected settings").read().await;
 			let map = data.get::<ButtplugMap>().expect("Expected buttplug map");
@@ -109,7 +111,7 @@ impl TypeMapKey for PowerSettingsKey {
 struct DatabasePath;
 
 impl TypeMapKey for DatabasePath {
-    type Value = String;
+    type Value =Mutex<Connection>;
 }
 
 fn main() -> Result<()> {
@@ -122,8 +124,6 @@ fn main() -> Result<()> {
 		.group(&GENERAL_GROUP);
 
 	let token = env::var("DISCORD_TOKEN").expect("No discord token");
-
-	println!("token: {:?}", token);
 
 	let rt = tokio::runtime::Builder::new_multi_thread()
 		.worker_threads(8).enable_all()
@@ -207,8 +207,8 @@ async fn ping(ctx: &Context, msg: &Message) -> CommandResult {
 }
 
 #[command]
-async fn decay(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
-	let decay = match args.parse::<String>() {
+async fn decay(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
+	let decay = match args.single::<String>() {
 		Ok(s) => s,
 		Err(why) => {
 			println!("Couldn't parse string: {:#?}", why);
@@ -216,7 +216,7 @@ async fn decay(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
 		}
 	};
 	let decay = match decay.as_str() {
-		"halflife" => {
+		"hl" | "halflife" => {
 			let hl = match args.parse::<f64>() {
 				Ok(hl) => hl,
 				Err(_) => {
@@ -250,6 +250,15 @@ async fn decay(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
 
 	msg.channel_id.say(ctx, "Decay updated!").await.ok();
 
+	Ok(())
+}
+
+#[command]
+async fn settings(ctx: &Context, msg: &Message) -> CommandResult {
+	let data = ctx.data.read().await;
+	let settings = *data.get::<PowerSettingsKey>().expect("Expected settings").read().await;
+	let content = format!("Current decay: {:?}", settings.decay);
+	msg.channel_id.say(ctx, content).await.ok();
 	Ok(())
 }
 

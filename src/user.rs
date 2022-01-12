@@ -66,6 +66,7 @@ impl ButtplugUser {
 			Some(c) => c,
 			None => return,
 		};
+		self.last_update = now;
 		self.power = get_next_power(current, delta, decay);
 		let devices = client.devices();
 		match self.power {
@@ -83,6 +84,7 @@ impl ButtplugUser {
 
 	pub fn add_power(&mut self, power: f64) {
 		self.power = Some(self.power.unwrap_or(0.0) + power);
+		self.last_update = Instant::now();
 	}
 
 	pub async fn stop(&mut self) {
@@ -96,6 +98,9 @@ impl ButtplugUser {
 		}
 	}
 
+	/// Because of the arc mutex context the user is in, we can't close and
+	/// drop the user, and must instead drop the client, and then on all of
+	/// its uses check if it is connected before continuing or dropping it.
 	fn check_connected(&self) -> bool {
 		self.client.is_some()
 	}
