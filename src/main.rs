@@ -1,18 +1,19 @@
-use std::{collections::HashMap, time::Duration};
+mod user;
+
+use user::{ButtplugUser, PowerSettings, Decay, decay_loop};
+
+use std::sync::Arc;
+use std::{collections::HashMap};
 use std::env;
 
 use regex::Regex;
 #[macro_use]
 extern crate lazy_static;
-
 use color_eyre::Result;
-
 use dotenv::dotenv;
-
 use buttplug::{
     client::{
         ButtplugClient,
-        device::VibrateCommand,
     },
     connector::{ButtplugRemoteClientConnector, ButtplugWebsocketClientTransport},
     core::messages::serializer::ButtplugClientJSONSerializer,
@@ -40,7 +41,7 @@ use serenity::{
 };
 
 #[group]
-#[commands(join, leave, stop, please)]
+#[commands(ping, join, leave, stop, decay)]
 struct General;
 
 struct Handler;
@@ -49,15 +50,6 @@ lazy_static!{
 	static ref GOOD_GIRL_REGEX: Regex = Regex::new(
 		"(?i)good (?:girl|kitt(?:y|en))"
 	).unwrap();
-}
-
-async fn vibrate_all(client: &ButtplugClient) {
-	let devices = client.devices();
-	let cmds = devices.iter()
-		.map(|d| d.vibrate(VibrateCommand::Speed(1.0))).collect::<Vec<_>>();
-	futures::future::join_all(cmds).await;
-	tokio::time::sleep(Duration::from_secs(1)).await;
-	client.stop_all_devices().await;
 }
 
 #[async_trait]
@@ -77,24 +69,27 @@ impl EventHandler for Handler {
 			},
 		};
 		let data = ctx.data.read().await;
+		let settings: PowerSettings = *data.get::<PowerSettingsKey>().expect("Expected settings").read().await;
 		let map = data.get::<ButtplugMap>().expect("Expected buttplug map");
 		let victim = &message.author.id;
-		let client = match map.get(victim) {
-			Some(c) => c,
+		let mut victim = match map.get(victim) {
+			Some(c) => c.lock().await,
 			None => return,
 		};
-		vibrate_all(client).await;
+		victim.add_power(settings.reaction_hit);
 	}
 
 	async fn message(&self, ctx: Context, msg: Message) {
 		if GOOD_GIRL_REGEX.is_match(&msg.content) {
-			let victims = msg.mentions.iter();
 			let data = ctx.data.read().await;
+			let settings = *data.get::<PowerSettingsKey>().expect("Expected settings").read().await;
 			let map = data.get::<ButtplugMap>().expect("Expected buttplug map");
-			let fut = victims
-				.filter_map(|v| map.get(&v.id))
-				.map(|client| vibrate_all(client));
-				futures::future::join_all(fut).await;
+			let fut = msg.mentions.iter().filter_map(|u| map.get(&u.id).map(|v| Arc::clone(v))).map(|v| async move {
+				let mut lock = v.lock().await;
+				lock.add_power(settings.praise_hit);
+			});
+
+			futures::future::join_all(fut).await;
 		}
 	}
 }
@@ -102,7 +97,13 @@ impl EventHandler for Handler {
 struct ButtplugMap;
 
 impl TypeMapKey for ButtplugMap {
-    type Value = HashMap<UserId, ButtplugClient>;
+    type Value = HashMap<UserId, Arc<Mutex<ButtplugUser>>>;
+}
+
+struct PowerSettingsKey;
+
+impl TypeMapKey for PowerSettingsKey {
+	type Value = Arc<RwLock<PowerSettings>>;
 }
 
 struct DatabasePath;
@@ -139,6 +140,7 @@ fn main() -> Result<()> {
 		{
 			let mut data = client.data.write().await;
 			data.insert::<ButtplugMap>(HashMap::default());
+			data.insert::<PowerSettingsKey>(Arc::new(RwLock::new(PowerSettings::default())));
 		}
 
 		// start listening for events by starting a single shard
@@ -151,32 +153,32 @@ fn main() -> Result<()> {
 }
 
 lazy_static! {
-    static ref web_socket_regex : Regex = Regex::new(
-        r"((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9]):\d{5}"
-    ).unwrap();
+	static ref WEB_SOCKET_REGEX : Regex = Regex::new(
+		r"((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9]):\d{5}"
+	).unwrap();
 }
 
 #[command]
 async fn join(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
-    let arg = match args.single::<String>() {
-        Ok(a) => a,
-        Err(_) => {
-            msg.channel_id.say(ctx, "You forgot to give an IP for me to connect to!").await.ok();
-            return Ok(());
-        }
-    };
-    if !web_socket_regex.is_match(&arg) {
-        msg.channel_id.say(ctx, "Hmm, What you sent doesn't look like an IP...").await.ok();
-        return Ok(());
-    };
-    let ip = format!("ws://{}", arg);
-		println!("Connecting to {}", ip);
-    let connector = ButtplugRemoteClientConnector::<
-            ButtplugWebsocketClientTransport,
-            ButtplugClientJSONSerializer,
-        >::new(ButtplugWebsocketClientTransport::new_insecure_connector(
-            &ip
-        ));
+	let arg = match args.single::<String>() {
+		Ok(a) => a,
+		Err(_) => {
+			msg.channel_id.say(ctx, "You forgot to give an IP for me to connect to!").await.ok();
+			return Ok(());
+		}
+	};
+	if !WEB_SOCKET_REGEX.is_match(&arg) {
+		msg.channel_id.say(ctx, "Hmm, What you sent doesn't look like an IP...").await.ok();
+		return Ok(());
+	};
+	let ip = format!("ws://{}", arg);
+	println!("Connecting to {}", ip);
+	let connector = ButtplugRemoteClientConnector::<
+		ButtplugWebsocketClientTransport,
+		ButtplugClientJSONSerializer,
+	>::new(ButtplugWebsocketClientTransport::new_insecure_connector(
+		&ip
+	));
 
     let client = ButtplugClient::new("Euphoria bot");
     if let Err(why) = client.connect(connector).await {
@@ -187,65 +189,95 @@ async fn join(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
     client.start_scanning().await.ok();
     let mut data = ctx.data.write().await;
     let map = data.get_mut::<ButtplugMap>().unwrap();
-    map.insert(msg.author.id, client);
+	let victim = Arc::new(Mutex::new(ButtplugUser::new(client)));
+	map.insert(msg.author.id, Arc::clone(&victim));
+	let settings = data.get::<PowerSettingsKey>().expect("Expected Settings");
+	msg.channel_id.say(ctx, "I got connected!").await.ok();
 
-    msg.channel_id.say(ctx, "I got connected!").await.ok();
-    Ok(())
+	tokio::spawn(decay_loop(victim, Arc::clone(settings)));
+
+	Ok(())
+}
+
+#[command]
+async fn ping(ctx: &Context, msg: &Message) -> CommandResult {
+	msg.reply(ctx, "pong!").await?;
+
+	Ok(())
+}
+
+#[command]
+async fn decay(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
+	let decay = match args.parse::<String>() {
+		Ok(s) => s,
+		Err(why) => {
+			println!("Couldn't parse string: {:#?}", why);
+			return Ok(());
+		}
+	};
+	let decay = match decay.as_str() {
+		"halflife" => {
+			let hl = match args.parse::<f64>() {
+				Ok(hl) => hl,
+				Err(_) => {
+					msg.channel_id.say(ctx, "The halflife needs to be a number!").await.ok();
+					return Ok(());
+				}
+			};
+			Decay::HalfLife(hl)
+		},
+		"linear" => {
+			let duration = match args.parse::<f64>() {
+				Ok(dur) => dur,
+				Err(_) => {
+					msg.channel_id.say(ctx, "The duration needs to be a number!").await.ok();
+					return Ok(())
+				}
+			};
+			Decay::Linear(duration)
+		},
+		unsupported => {
+			let content = format!("I don't know what {} is!", unsupported);
+			msg.channel_id.say(ctx, content).await.ok();
+			return Ok(())
+		}
+	};
+
+	let data = ctx.data.read().await;
+	let settings = data.get::<PowerSettingsKey>().expect("Expected settings");
+	let mut lock = settings.write().await;
+	lock.decay = decay;
+
+	msg.channel_id.say(ctx, "Decay updated!").await.ok();
+
+	Ok(())
 }
 
 #[command]
 async fn leave(ctx: &Context, msg: &Message) -> CommandResult {
-    let mut data = ctx.data.write().await;
-    let map = data.get_mut::<ButtplugMap>().unwrap();
-    let client = match map.remove(&msg.author.id) {
-        Some(c) => c,
-        None => {
-            msg.channel_id.say(ctx, "You're not connected!").await.ok();
-            return Ok(());
-        }
-    };
-    client.stop_all_devices().await.ok();
-    if let Err(why) = client.disconnect().await {
-        println!("Couldn't disconnect: {:?}", why);
-    };
-    msg.channel_id.say(ctx, "You have been disconnected :3").await.ok();
-    Ok(())
+	let mut data = ctx.data.write().await;
+	let map = data.get_mut::<ButtplugMap>().unwrap();
+	let client = match map.remove(&msg.author.id) {
+		Some(c) => c,
+		None => {
+			msg.channel_id.say(ctx, "You're not connected!").await.ok();
+			return Ok(());
+		}
+	};
+	let mut lock = client.lock().await;
+	if let Err(why) = lock.disconnect().await {
+		println!("Couldn't disconnect: {:?}", why);
+	};
+	msg.channel_id.say(ctx, "You have been disconnected :3").await.ok();
+	Ok(())
 }
 
 #[command]
 async fn stop(ctx: &Context, msg: &Message) -> CommandResult {
-    let mut data = ctx.data.write().await;
-    let map = data.get_mut::<ButtplugMap>().unwrap();
+    let data = ctx.data.read().await;
+    let map = data.get::<ButtplugMap>().unwrap();
     if let Some(c) =  map.get(&msg.author.id) {
-        c.stop_all_devices().await.ok();
+        c.lock().await.stop().await;
     };
     Ok(())
-}
-
-#[command]
-async fn please(ctx: &Context, msg: &Message) -> CommandResult {
-	let victim = msg.mentions
-		.iter().next()
-		.unwrap_or(&msg.author);
-	
-	let mut data = ctx.data.write().await;
-	let map = data.get_mut::<ButtplugMap>().unwrap();
-	let client = match map.get(&victim.id) {
-		Some(c) => c,
-		None => {
-			let content = {
-				if victim.id == msg.author.id {String::from("You're not connected!")}
-				else {format!("{} isn't connected!", victim.name)}
-			};
-			msg.channel_id.say(ctx, content).await.ok();
-			return Ok(());
-		}
-	};
-	let devices = client.devices();
-	let cmds = devices.iter().map(|d| d.vibrate(VibrateCommand::Speed(1.0)));
-	futures::future::join_all(cmds).await;
-	msg.channel_id.say(ctx, "brrr~~").await.ok();
-	tokio::time::sleep(Duration::from_secs(1)).await;
-	client.stop_all_devices().await;
-	Ok(())
 }
