@@ -5,7 +5,6 @@ use tokio::{
 	time::{
 		Instant,
 		Duration,
-		sleep,
 	},
 	sync::{
 		Mutex,
@@ -33,7 +32,7 @@ impl Default for PowerSettings {
 	fn default() -> Self {
 		Self {
 			decay: Decay::HalfLife(1.0),
-			praise_hit: 0.9,
+			praise_hit: 1.0,
 			reaction_hit: 0.3
 		}
 	}
@@ -42,7 +41,15 @@ impl Default for PowerSettings {
 pub struct ButtplugUser {
 	power: Option<f64>,
 	client: Option<ButtplugClient>,
-	last_update: Instant
+	last_update: Instant,
+	last_praise: Instant,
+	sustain: Sustain,
+}
+
+enum Sustain {
+	Praised,
+	Praising,
+	Release,
 }
 
 impl ButtplugUser {
@@ -50,11 +57,25 @@ impl ButtplugUser {
 		Self {
 			power: None,
 			client: Some(client),
-			last_update: Instant::now()
+			last_update: Instant::now(),
+			last_praise: Instant::now(),
+			sustain: Sustain::Release,
 		}
 	}
 
+	async fn vibrate_all(&self, power: f64) {
+		let client = match self.client.as_ref() {
+				Some(c) => c,
+				None => return,
+		};
+		let devices = client.devices();
+		let fut = devices.iter()
+			.map(|d| d.vibrate(VibrateCommand::Speed(power)));
+		futures::future::join_all(fut).await;
+	}  
+
 	/// Decay power and send it to the server.
+	/// Return indicates if it should sustain.
 	pub async fn decay_power(&mut self, decay: Decay) {
 		let client = match self.client {
 			Some(ref c) => c,
@@ -62,11 +83,28 @@ impl ButtplugUser {
 		};
 		let now = Instant::now();
 		let delta = now.duration_since(self.last_update).as_secs_f64();
+		self.last_update = now;
+		match self.sustain {
+			Sustain::Praising => {
+				self.sustain = Sustain::Praised;
+				self.vibrate_all(self.power.unwrap_or(0.0)).await;
+				self.last_praise = now;
+				return;
+			},
+			Sustain::Praised => {
+				if self.last_praise.elapsed() >= Duration::from_secs(1) {
+					self.sustain = Sustain::Release;
+				}
+				return;
+			},
+			Sustain::Release => {
+				// Continue
+			}
+		}
 		let current = match self.power {
 			Some(c) => c,
 			None => return,
 		};
-		self.last_update = now;
 		self.power = get_next_power(current, delta, decay);
 		let devices = client.devices();
 		match self.power {
@@ -85,6 +123,7 @@ impl ButtplugUser {
 	pub fn add_power(&mut self, power: f64) {
 		self.power = Some(self.power.unwrap_or(0.0) + power);
 		self.last_update = Instant::now();
+		self.sustain = Sustain::Praising;
 	}
 
 	pub async fn stop(&mut self) {
@@ -131,7 +170,6 @@ pub async fn decay_loop(
 			let settings_lock = settings.read().await;
 			victim_lock.decay_power(settings_lock.decay).await;
 		}
-		sleep(Duration::from_millis(20)).await;
 	}
 }
 
