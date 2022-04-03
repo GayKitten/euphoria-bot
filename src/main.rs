@@ -1,6 +1,10 @@
 mod user;
+mod voice;
 
 use user::{ButtplugUser, PowerSettings, Decay, decay_loop};
+use voice::{
+	register_events,
+};
 
 use std::sync::Arc;
 use std::{collections::HashMap};
@@ -20,24 +24,31 @@ use buttplug::{
 };
 
 use serenity::{
-    prelude::*,
-    async_trait,
-    client::{
-        Client, Context, EventHandler,
-    },
-    model::{
-				prelude::*,
-        id::UserId,
-        channel::{
-        Message,
-        },
-    },
-    framework::standard::{
-        Args, CommandResult, StandardFramework,
-        macros::{
-            command, group
-        }
-    },
+	prelude::*,
+	async_trait,
+	client::{
+		Client, Context, EventHandler,
+	},
+	model::{
+		prelude::*,
+		id::UserId,
+		channel::{
+			Message,
+		},
+	},
+	framework::standard::{
+		Args, CommandResult, StandardFramework,
+		macros::{
+			command, group
+		}
+	},
+	Result as SResult,
+};
+
+use songbird::{
+	Config,
+	driver::DecodeMode,
+	SerenityInit,
 };
 
 use rusqlite::Connection;
@@ -72,9 +83,10 @@ impl EventHandler for Handler {
 		};
 		let data = ctx.data.read().await;
 		let settings: PowerSettings = *data.get::<PowerSettingsKey>().expect("Expected settings").read().await;
-		let map = data.get::<ButtplugMap>().expect("Expected buttplug map");
+		let map = data.get::<ButtplugMapKey>().expect("Expected buttplug map");
+		let lock = map.read().await;
 		let victim = &message.author.id;
-		let mut victim = match map.get(victim) {
+		let mut victim = match lock.get(victim) {
 			Some(c) => c.lock().await,
 			None => return,
 		};
@@ -83,12 +95,14 @@ impl EventHandler for Handler {
 
 	async fn message(&self, ctx: Context, msg: Message) {
 		if msg.mentions.len() != 0 && GOOD_GIRL_REGEX.is_match(&msg.content) {
+			let count = GOOD_GIRL_REGEX.find_iter(&msg.content).count();
 			let data = ctx.data.read().await;
 			let settings = *data.get::<PowerSettingsKey>().expect("Expected settings").read().await;
-			let map = data.get::<ButtplugMap>().expect("Expected buttplug map");
-			let fut = msg.mentions.iter().filter_map(|u| map.get(&u.id).map(|v| Arc::clone(v))).map(|v| async move {
+			let map = data.get::<ButtplugMapKey>().expect("Expected buttplug map");
+			let lock = map.read().await;
+			let fut = msg.mentions.iter().filter_map(|u| lock.get(&u.id).map(|v| Arc::clone(v))).map(|v| async move {
 				let mut lock = v.lock().await;
-				lock.add_power(settings.praise_hit);
+				lock.add_power(settings.praise_hit * (count as f64));
 			});
 
 			futures::future::join_all(fut).await;
@@ -96,10 +110,12 @@ impl EventHandler for Handler {
 	}
 }
 
-struct ButtplugMap;
+pub type ButtplugMap = Arc<RwLock<HashMap<UserId, Arc<Mutex<ButtplugUser>>>>>;
 
-impl TypeMapKey for ButtplugMap {
-    type Value = HashMap<UserId, Arc<Mutex<ButtplugUser>>>;
+struct ButtplugMapKey;
+
+impl TypeMapKey for ButtplugMapKey {
+    type Value = ButtplugMap;
 }
 
 struct PowerSettingsKey;
@@ -108,10 +124,10 @@ impl TypeMapKey for PowerSettingsKey {
 	type Value = Arc<RwLock<PowerSettings>>;
 }
 
-struct DatabasePath;
+struct DatabaseKey;
 
-impl TypeMapKey for DatabasePath {
-    type Value =Mutex<Connection>;
+impl TypeMapKey for DatabaseKey {
+    type Value = Mutex<Connection>;
 }
 
 fn main() -> Result<()> {
@@ -125,6 +141,11 @@ fn main() -> Result<()> {
 
 	let token = env::var("DISCORD_TOKEN").expect("No discord token");
 
+	let db_path = env::var("DB_PATH").ok();
+
+	let songbird_config = Config::default()
+		.decode_mode(DecodeMode::Decrypt);
+
 	let rt = tokio::runtime::Builder::new_multi_thread()
 		.worker_threads(8).enable_all()
 		.build().expect("Couldn't start runtime");
@@ -134,13 +155,17 @@ fn main() -> Result<()> {
 		let mut client = Client::builder(token)
 			.event_handler(Handler)
 			.framework(framework)
+			.register_songbird_from_config(songbird_config)
 			.await
 			.expect("Error creating client");
-
+		let db = db_path.map(|path| Connection::open(path).expect("Failed to open the database."));
 		{
 			let mut data = client.data.write().await;
-			data.insert::<ButtplugMap>(HashMap::default());
+			data.insert::<ButtplugMapKey>(Arc::default());
 			data.insert::<PowerSettingsKey>(Arc::new(RwLock::new(PowerSettings::default())));
+			if let Some(db) = db {
+				data.insert::<DatabaseKey>(Mutex::new(db));
+			}
 		}
 
 		// start listening for events by starting a single shard
@@ -163,12 +188,12 @@ async fn join(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
 	let arg = match args.single::<String>() {
 		Ok(a) => a,
 		Err(_) => {
-			msg.channel_id.say(ctx, "You forgot to give an IP for me to connect to!").await.ok();
+			msg_result(msg.channel_id.say(ctx, "You forgot to give an IP for me to connect to!").await);
 			return Ok(());
 		}
 	};
 	if !WEB_SOCKET_REGEX.is_match(&arg) {
-		msg.channel_id.say(ctx, "Hmm, What you sent doesn't look like an IP...").await.ok();
+		msg_result(msg.channel_id.say(ctx, "Hmm, What you sent doesn't look like an IP...").await);
 		return Ok(());
 	};
 	let ip = format!("ws://{}", arg);
@@ -180,19 +205,20 @@ async fn join(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
 		&ip
 	));
 
-    let client = ButtplugClient::new("Euphoria bot");
-    if let Err(why) = client.connect(connector).await {
-        println!("Couldn't connect: {:#?}", why);
-        msg.channel_id.say(ctx, "I couldn't connect with you ~w~").await.ok();
-        return Ok(());
-    }
-    client.start_scanning().await.ok();
-    let mut data = ctx.data.write().await;
-    let map = data.get_mut::<ButtplugMap>().unwrap();
+	let client = ButtplugClient::new("Euphoria bot");
+	if let Err(why) = client.connect(connector).await {
+		println!("Couldn't connect: {:#?}", why);
+		msg.channel_id.say(ctx, "I couldn't connect with you ~w~").await.ok();
+		return Ok(());
+	}
+	client.start_scanning().await.ok();
+	let data = ctx.data.read().await;
 	let victim = Arc::new(Mutex::new(ButtplugUser::new(client)));
-	map.insert(msg.author.id, Arc::clone(&victim));
+	let map = data.get::<ButtplugMapKey>().unwrap();
+	let mut lock = map.write().await;
+	lock.insert(msg.author.id, Arc::clone(&victim));
 	let settings = data.get::<PowerSettingsKey>().expect("Expected Settings");
-	msg.channel_id.say(ctx, "I got connected!").await.ok();
+	msg_result(msg.channel_id.say(ctx, "I got connected!").await);
 
 	tokio::spawn(decay_loop(victim, Arc::clone(settings)));
 
@@ -220,7 +246,7 @@ async fn decay(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
 			let hl = match args.parse::<f64>() {
 				Ok(hl) => hl,
 				Err(_) => {
-					msg.channel_id.say(ctx, "The halflife needs to be a number!").await.ok();
+					msg_result(msg.channel_id.say(ctx, "The halflife needs to be a number!").await);
 					return Ok(());
 				}
 			};
@@ -230,7 +256,7 @@ async fn decay(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
 			let duration = match args.parse::<f64>() {
 				Ok(dur) => dur,
 				Err(_) => {
-					msg.channel_id.say(ctx, "The duration needs to be a number!").await.ok();
+					msg_result(msg.channel_id.say(ctx, "The duration needs to be a number!").await);
 					return Ok(())
 				}
 			};
@@ -238,7 +264,7 @@ async fn decay(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
 		},
 		unsupported => {
 			let content = format!("I don't know what {} is!", unsupported);
-			msg.channel_id.say(ctx, content).await.ok();
+			msg_result(msg.channel_id.say(ctx, content).await);
 			return Ok(())
 		}
 	};
@@ -248,7 +274,7 @@ async fn decay(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
 	let mut lock = settings.write().await;
 	lock.decay = decay;
 
-	msg.channel_id.say(ctx, "Decay updated!").await.ok();
+	msg_result(msg.channel_id.say(ctx, "Decay updated!").await);
 
 	Ok(())
 }
@@ -258,18 +284,19 @@ async fn settings(ctx: &Context, msg: &Message) -> CommandResult {
 	let data = ctx.data.read().await;
 	let settings = *data.get::<PowerSettingsKey>().expect("Expected settings").read().await;
 	let content = format!("Current decay: {:?}", settings.decay);
-	msg.channel_id.say(ctx, content).await.ok();
+	msg_result(msg.channel_id.say(ctx, content).await);
 	Ok(())
 }
 
 #[command]
 async fn leave(ctx: &Context, msg: &Message) -> CommandResult {
-	let mut data = ctx.data.write().await;
-	let map = data.get_mut::<ButtplugMap>().unwrap();
-	let client = match map.remove(&msg.author.id) {
+	let data = ctx.data.read().await;
+	let map = data.get::<ButtplugMapKey>().unwrap();
+	let mut lock = map.write().await;
+	let client = match lock.remove(&msg.author.id) {
 		Some(c) => c,
 		None => {
-			msg.channel_id.say(ctx, "You're not connected!").await.ok();
+			msg_result(msg.channel_id.say(ctx, "You're not connected!").await);
 			return Ok(());
 		}
 	};
@@ -277,16 +304,61 @@ async fn leave(ctx: &Context, msg: &Message) -> CommandResult {
 	if let Err(why) = lock.disconnect().await {
 		println!("Couldn't disconnect: {:?}", why);
 	};
-	msg.channel_id.say(ctx, "You have been disconnected :3").await.ok();
+	msg_result(msg.channel_id.say(ctx, "You have been disconnected :3").await);
 	Ok(())
 }
 
 #[command]
 async fn stop(ctx: &Context, msg: &Message) -> CommandResult {
     let data = ctx.data.read().await;
-    let map = data.get::<ButtplugMap>().unwrap();
-    if let Some(c) =  map.get(&msg.author.id) {
+    let map = data.get::<ButtplugMapKey>().unwrap();
+		let lock = map.read().await;
+    if let Some(c) =  lock.get(&msg.author.id) {
         c.lock().await.stop().await;
     };
     Ok(())
+}
+
+#[command]
+async fn vc(ctx: &Context, msg: &Message) -> CommandResult {
+	let guild = match msg.guild(ctx).await {
+		Some(g) => g,
+		None => return Ok(()),
+	};
+
+	let guild_id = guild.id;
+
+	let voice_channel = guild.voice_states
+		.get(&msg.author.id)
+		.and_then(|vs| vs.channel_id);
+
+	let channel_id = match voice_channel {
+		Some(c) => c,
+		None => {
+			msg_result(msg.channel_id.say(ctx, "You're not in vc!").await);
+			return Ok(());
+		} 
+	};
+
+	let manager = songbird::get(ctx).await
+		.expect("Songbird created during initialisation.");
+	
+	let (handler_lock, con_result) = manager.join(guild_id, channel_id).await;
+
+	if let Ok(_) = con_result {
+		let mut handler = handler_lock.lock().await;
+		let buttplug_map = {
+			let data = ctx.data.read().await;
+			Arc::clone(data.get::<ButtplugMapKey>().expect("Map inserted at startup"))
+		};
+		register_events(&mut handler, buttplug_map);
+	}
+
+	Ok(())
+}
+
+fn msg_result(res: SResult<Message>) {
+	if let Err(why) = res {
+		println!("Couldn't send message: {:?}", why);
+	}
 }

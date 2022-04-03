@@ -32,7 +32,7 @@ impl Default for PowerSettings {
 	fn default() -> Self {
 		Self {
 			decay: Decay::HalfLife(1.0),
-			praise_hit: 1.0,
+			praise_hit: 0.3,
 			reaction_hit: 0.3
 		}
 	}
@@ -43,6 +43,7 @@ pub struct ButtplugUser {
 	client: Option<ButtplugClient>,
 	last_update: Instant,
 	last_praise: Instant,
+	voice_praisers: u8,
 	sustain: Sustain,
 }
 
@@ -59,6 +60,7 @@ impl ButtplugUser {
 			client: Some(client),
 			last_update: Instant::now(),
 			last_praise: Instant::now(),
+			voice_praisers: 0,
 			sustain: Sustain::Release,
 		}
 	}
@@ -72,7 +74,7 @@ impl ButtplugUser {
 		let fut = devices.iter()
 			.map(|d| d.vibrate(VibrateCommand::Speed(power)));
 		futures::future::join_all(fut).await;
-	}  
+	}
 
 	/// Decay power and send it to the server.
 	/// Return indicates if it should sustain.
@@ -126,6 +128,15 @@ impl ButtplugUser {
 		self.sustain = Sustain::Praising;
 	}
 
+	pub fn bump_voice_praisers(&mut self, up: bool) {
+		if up {
+			self.voice_praisers += 1;
+		} else {
+			self.voice_praisers -= 1;
+		}
+		println!("Praisers: {}", self.voice_praisers)
+	}
+
 	pub async fn stop(&mut self) {
 		let client = match self.client {
 			Some(ref c) => c,
@@ -176,6 +187,9 @@ pub async fn decay_loop(
 fn get_next_power(current: f64, delta: f64, decay: Decay) -> Option<f64> {
 	match decay {
 		Decay::HalfLife(hl) => Some(current * (2.0 as f64).powf(- delta / hl)),
-		Decay::Linear(time) => Some((current - delta / time).max(0.0)),
+		Decay::Linear(time) => {
+			let next = current - delta / time;
+			if next <= 0.0 { None } else { Some(next) }
+		},
 	}
 }
