@@ -1,27 +1,21 @@
+use std::{collections::HashMap, sync::Arc};
 
-use std::{sync::Arc, collections::HashMap};
-
-use futures::stream::StreamExt;
 use futures::stream::iter;
-use serenity::{
-	async_trait,
-	model::id::UserId, prelude::Mutex,
-};
+use futures::stream::StreamExt;
+use serenity::{async_trait, model::id::UserId, prelude::Mutex};
 
 use songbird::{
-	EventHandler as VoiceEventHandler,
-	EventContext,
-	Event,
-	Call, CoreEvent, model::{payload::Speaking}, events::context_data::SpeakingUpdateData,
+	events::context_data::SpeakingUpdateData, model::payload::Speaking, Call, CoreEvent, Event,
+	EventContext, EventHandler as VoiceEventHandler,
 };
 
-use tokio::sync::mpsc::{unbounded_channel,UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
-use crate::{ButtplugMap, user::ButtplugUser};
+use crate::{user::ButtplugUser, ButtplugMap};
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 enum VoiceEvent {
-	AddUser(u32, UserId, ),
+	AddUser(u32, UserId),
 	/// Whenever someone starts or stops speaking.
 	SpeakingState(u32, bool),
 }
@@ -55,21 +49,22 @@ impl Voicecall {
 			match event {
 				VoiceEvent::AddUser(ssrc, user) => {
 					self.ssrc_map.insert(ssrc, user);
-				},
+				}
 				VoiceEvent::SpeakingState(ssrc, speaking) => {
 					let user = self.ssrc_map.get(&ssrc);
-					let victims = self.victims
-						.iter()
-						.filter_map(|(id, victim)| {
-							if user.map(|uid| uid != id).unwrap_or(true) {
-								Some(victim)
-							} else { None }
-						});
+					let victims = self.victims.iter().filter_map(|(id, victim)| {
+						if user.map(|uid| uid != id).unwrap_or(true) {
+							Some(victim)
+						} else {
+							None
+						}
+					});
 					iter(victims)
 						.for_each_concurrent(None, |v| async move {
-						let mut lock = v.lock().await;
-						lock.bump_voice_praisers(speaking)
-					}).await;
+							let mut lock = v.lock().await;
+							lock.bump_voice_praisers(speaking)
+						})
+						.await;
 				}
 			}
 		}
@@ -79,25 +74,20 @@ impl Voicecall {
 #[derive(Clone)]
 pub struct VoiceHandler(UnboundedSender<VoiceEvent>);
 
-
 #[async_trait]
 impl VoiceEventHandler for VoiceHandler {
 	async fn act(&self, ctx: &EventContext<'_>) -> Option<Event> {
 		use EventContext as Ctx;
 		match ctx {
 			// New person speaking, map Ssrc to id.
-			Ctx::SpeakingStateUpdate(Speaking {
-				ssrc,
-				user_id,
-				..
-			}) => {
+			Ctx::SpeakingStateUpdate(Speaking { ssrc, user_id, .. }) => {
 				if let Some(id) = user_id {
 					let user_id = UserId(id.0);
 					let res = self.0.send(VoiceEvent::AddUser(*ssrc, user_id));
 					dbg!(res).ok();
 				}
-			},
-			&Ctx::SpeakingUpdate(SpeakingUpdateData {ssrc, speaking, ..}) => {
+			}
+			&Ctx::SpeakingUpdate(SpeakingUpdateData { ssrc, speaking, .. }) => {
 				self.0.send(VoiceEvent::SpeakingState(ssrc, speaking)).ok();
 			}
 			_ => (),
@@ -108,16 +98,10 @@ impl VoiceEventHandler for VoiceHandler {
 
 pub fn register_events(call: &mut Call, map: ButtplugMap) {
 	let (vc, handler) = Voicecall::new(map);
-	
-	call.add_global_event(
-		CoreEvent::SpeakingStateUpdate.into(),
-		handler.clone()
-	);
 
-	call.add_global_event(
-		CoreEvent::SpeakingUpdate.into(),
-		handler.clone()
-	);
+	call.add_global_event(CoreEvent::SpeakingStateUpdate.into(), handler.clone());
+
+	call.add_global_event(CoreEvent::SpeakingUpdate.into(), handler.clone());
 
 	tokio::spawn(vc.listen());
 }

@@ -1,17 +1,12 @@
-
 use std::sync::Arc;
 
+use actix::prelude::*;
+use buttplug::client::{ButtplugClient, ButtplugClientError, VibrateCommand};
+use regex::Regex;
 use tokio::{
-	time::{
-		Instant,
-		Duration,
-	},
-	sync::{
-		Mutex,
-		RwLock
-	},
+	sync::{Mutex, RwLock},
+	time::{Duration, Instant},
 };
-use buttplug::client::{ButtplugClient, VibrateCommand, ButtplugClientError};
 
 #[derive(Debug, Clone, Copy)]
 pub enum Decay {
@@ -33,7 +28,7 @@ impl Default for PowerSettings {
 		Self {
 			decay: Decay::HalfLife(1.0),
 			praise_hit: 0.3,
-			reaction_hit: 0.3
+			reaction_hit: 0.3,
 		}
 	}
 }
@@ -45,6 +40,12 @@ pub struct ButtplugUser {
 	last_praise: Instant,
 	voice_praisers: u8,
 	sustain: Sustain,
+	decay: Decay,
+	regex: Regex,
+}
+
+impl Actor for ButtplugUser {
+	type Context = Context<Self>;
 }
 
 enum Sustain {
@@ -62,16 +63,19 @@ impl ButtplugUser {
 			last_praise: Instant::now(),
 			voice_praisers: 0,
 			sustain: Sustain::Release,
+			decay: Decay::Linear(3.0),
+			regex: crate::GOOD_GIRL_REGEX.clone(),
 		}
 	}
 
 	async fn vibrate_all(&self, power: f64) {
 		let client = match self.client.as_ref() {
-				Some(c) => c,
-				None => return,
+			Some(c) => c,
+			None => return,
 		};
 		let devices = client.devices();
-		let fut = devices.iter()
+		let fut = devices
+			.iter()
 			.map(|d| d.vibrate(VibrateCommand::Speed(power)));
 		futures::future::join_all(fut).await;
 	}
@@ -92,13 +96,13 @@ impl ButtplugUser {
 				self.vibrate_all(self.power.unwrap_or(0.0)).await;
 				self.last_praise = now;
 				return;
-			},
+			}
 			Sustain::Praised => {
 				if self.last_praise.elapsed() >= Duration::from_secs(1) {
 					self.sustain = Sustain::Release;
 				}
 				return;
-			},
+			}
 			Sustain::Release => {
 				// Continue
 			}
@@ -111,14 +115,16 @@ impl ButtplugUser {
 		let devices = client.devices();
 		match self.power {
 			Some(power) => {
-				let fut = devices.iter().map(|d| d.vibrate(VibrateCommand::Speed(power)));
+				let fut = devices
+					.iter()
+					.map(|d| d.vibrate(VibrateCommand::Speed(power)));
 				futures::future::join_all(fut).await;
-			},
+			}
 			None => {
 				if let Err(why) = client.stop_all_devices().await {
 					println!("Couldn't stop devices: {:#?}", why);
 				}
-			},
+			}
 		}
 	}
 
@@ -160,7 +166,7 @@ impl ButtplugUser {
 			Some(c) => c,
 			None => return Ok(()),
 		};
-		
+
 		if let Err(why) = client.stop_all_devices().await {
 			println!("Couldn't stop devices: {:#?}", why);
 		}
@@ -168,15 +174,12 @@ impl ButtplugUser {
 	}
 }
 
-pub async fn decay_loop(
-		victim: Arc<Mutex<ButtplugUser>>,
-		settings: Arc<RwLock<PowerSettings>>
-	) {
+pub async fn decay_loop(victim: Arc<Mutex<ButtplugUser>>, settings: Arc<RwLock<PowerSettings>>) {
 	loop {
 		{
 			let mut victim_lock = victim.lock().await;
 			if !victim_lock.check_connected() {
-				return
+				return;
 			}
 			let settings_lock = settings.read().await;
 			victim_lock.decay_power(settings_lock.decay).await;
@@ -184,12 +187,39 @@ pub async fn decay_loop(
 	}
 }
 
+struct DecayTick;
+
+impl Message for DecayTick {
+	type Result = ();
+}
+
+impl Handler<DecayTick> for ButtplugUser {
+	type Result = ();
+
+	fn handle(&mut self, msg: DecayTick, ctx: &mut Self::Context) -> Self::Result {
+		if self.check_connected() {
+			return;
+		}
+		let fut = self.decay_power(self.decay);
+	}
+}
+
 fn get_next_power(current: f64, delta: f64, decay: Decay) -> Option<f64> {
 	match decay {
-		Decay::HalfLife(hl) => Some(current * (2.0 as f64).powf(- delta / hl)),
+		Decay::HalfLife(hl) => {
+			if current < 1e-8 {
+				None
+			} else {
+				Some(current * (2.0 as f64).powf(-delta / hl))
+			}
+		}
 		Decay::Linear(time) => {
 			let next = current - delta / time;
-			if next <= 0.0 { None } else { Some(next) }
-		},
+			if next <= 0.0 {
+				None
+			} else {
+				Some(next)
+			}
+		}
 	}
 }

@@ -2,4 +2,5 @@ CREATE TABLE IF NOT EXISTS Users (
 	id TEXT PRIMARY KEY,
 	ip TEXT,
 	port TEXT,
+	regex TEXT,
 );
