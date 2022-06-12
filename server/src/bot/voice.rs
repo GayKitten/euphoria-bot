@@ -11,7 +11,7 @@ use songbird::{
 
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
-use crate::{user::ButtplugUser, ButtplugMap};
+use super::{user::ButtplugUser, ButtplugMap};
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 enum VoiceEvent {

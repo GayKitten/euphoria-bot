@@ -1,23 +1,19 @@
 mod user;
 mod voice;
+mod flirting;
+
+use std::{env, sync::Arc, collections::HashMap};
 
 use user::{decay_loop, ButtplugUser, Decay, PowerSettings};
 use voice::register_events;
 
-use std::collections::HashMap;
-use std::env;
-use std::sync::Arc;
-
 use regex::Regex;
-#[macro_use]
-extern crate lazy_static;
+
 use buttplug::{
 	client::ButtplugClient,
 	connector::{ButtplugRemoteClientConnector, ButtplugWebsocketClientTransport},
 	core::messages::serializer::ButtplugClientJSONSerializer,
 };
-use color_eyre::Result;
-use dotenv::dotenv;
 
 use serenity::{
 	async_trait,
@@ -33,7 +29,26 @@ use serenity::{
 
 use songbird::{driver::DecodeMode, Config, SerenityInit};
 
-use rusqlite::Connection;
+pub type ButtplugMap = Arc<RwLock<HashMap<UserId, Arc<Mutex<ButtplugUser>>>>>;
+
+struct ButtplugMapKey;
+
+impl TypeMapKey for ButtplugMapKey {
+	type Value = ButtplugMap;
+}
+
+struct PowerSettingsKey;
+
+impl TypeMapKey for PowerSettingsKey {
+	type Value = Arc<RwLock<PowerSettings>>;
+}
+
+struct DatabaseKey;
+
+impl TypeMapKey for DatabaseKey {
+	type Value = Mutex<Connection>;
+}
+
 
 #[group]
 #[commands(ping, join, leave, stop, decay, settings)]
@@ -103,73 +118,26 @@ impl EventHandler for Handler {
 	}
 }
 
-pub type ButtplugMap = Arc<RwLock<HashMap<UserId, Arc<Mutex<ButtplugUser>>>>>;
-
-struct ButtplugMapKey;
-
-impl TypeMapKey for ButtplugMapKey {
-	type Value = ButtplugMap;
-}
-
-struct PowerSettingsKey;
-
-impl TypeMapKey for PowerSettingsKey {
-	type Value = Arc<RwLock<PowerSettings>>;
-}
-
-struct DatabaseKey;
-
-impl TypeMapKey for DatabaseKey {
-	type Value = Mutex<Connection>;
-}
-
-fn main() -> Result<()> {
-	color_eyre::install()?;
-
-	dotenv().ok();
-
+pub async fn run_bot() -> Result<(), anyhow::Error> {
 	let framework = StandardFramework::new()
 		.configure(|c| c.prefix("a!")) // set the bot's prefix to "a!"
 		.group(&GENERAL_GROUP);
 
-	let token = env::var("DISCORD_TOKEN").expect("No discord token");
-
-	let db_path = env::var("DB_PATH").ok();
-
 	let songbird_config = Config::default().decode_mode(DecodeMode::Decrypt);
 
-	let rt = tokio::runtime::Builder::new_multi_thread()
-		.worker_threads(8)
-		.enable_all()
-		.build()
-		.expect("Couldn't start runtime");
+	let token = env::var("DISCORD_TOKEN").expect("missing DISCORD_TOKEN var");
 
-	rt.block_on(async move {
-		// Login with a bot token
-		let mut client = Client::builder(token)
-			.event_handler(Handler)
-			.framework(framework)
-			.register_songbird_from_config(songbird_config)
-			.await
-			.expect("Error creating client");
-		let db = db_path.map(|path| Connection::open(path).expect("Failed to open the database."));
-		{
-			let mut data = client.data.write().await;
-			data.insert::<ButtplugMapKey>(Arc::default());
-			data.insert::<PowerSettingsKey>(Arc::new(RwLock::new(PowerSettings::default())));
-			if let Some(db) = db {
-				data.insert::<DatabaseKey>(Mutex::new(db));
-			}
-		}
+	let mut client = Client::builder(token)
+		.event_handler(Handler)
+		.framework(framework)
+		.register_songbird_from_config(songbird_config)
+		.await
+		.expect("Error creating client");
 
-		// start listening for events by starting a single shard
-		if let Err(why) = client.start().await {
-			println!("An error occurred while running the client: {:?}", why);
-		}
-	});
-
-	Ok(())
+	let res: Result<(), anyhow::Error> = client.start().await.map_err(anyhow::Error::from);
+	res
 }
+
 
 lazy_static! {
 	static ref WEB_SOCKET_REGEX : Regex = Regex::new(
@@ -233,7 +201,6 @@ async fn join(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
 #[command]
 async fn ping(ctx: &Context, msg: &Message) -> CommandResult {
 	msg.reply(ctx, "pong!").await?;
-
 	Ok(())
 }
 
@@ -306,7 +273,7 @@ async fn settings(ctx: &Context, msg: &Message) -> CommandResult {
 }
 
 #[command]
-async fn regex(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
+async fn regex(ctx: &Context, msg: &Message, args: Args) -> CommandResult {
 	let data = ctx.data.read().await;
 	let map = data.get::<ButtplugMapKey>().unwrap();
 	let lock = map.read().await;

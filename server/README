@@ -1,0 +1,13 @@
+# Server
+
+The server
+
+
+# Environment variables
+
+- `DISCORD_TOKEN`: Discord bot token.
+- `APPLICATION_ID`: Discord application ID.
+
+- `CLIENT_ID`: Discord client ID.
+- `CLIENT_SECRET`: Discord client secret.
+- `REDIRECT_URL`: Oauth Redirect URL.

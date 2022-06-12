@@ -7,6 +7,7 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+anyhow = "1.0.57"
 buttplug = "3.0"
 serenity = { version = "0.10.9", features = ["collector", "voice"] }
 tokio = { version = "1.5", features = ["macros", "time", "sync"] }
@@ -15,6 +16,12 @@ regex = "1.4.5"
 lazy_static = "1.4.0"
 dotenv = "0.15.0"
 color-eyre = "0.5.11"
-rusqlite = "0.26.3"
 songbird = "0.2.1"
+
+actix-web = "4.0.1"
 actix = "0.13.0"
+oauth2 = "4.2.0"
+sqlx = { version = "0.5.11", features = ["runtime-tokio-native-tls", "offline", "postgres", "chrono"] }
+serde = { version="1.0.137", features = ["derive"]}
+serde_json = "1.0.81"
+reqwest = "0.11.10"

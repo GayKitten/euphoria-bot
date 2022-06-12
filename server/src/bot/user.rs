@@ -64,7 +64,7 @@ impl ButtplugUser {
 			voice_praisers: 0,
 			sustain: Sustain::Release,
 			decay: Decay::Linear(3.0),
-			regex: crate::GOOD_GIRL_REGEX.clone(),
+			regex: super::GOOD_GIRL_REGEX.clone(),
 		}
 	}
 
