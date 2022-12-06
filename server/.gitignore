@@ -2,3 +2,4 @@
 .env
 *.db
 *.tar.gz
+dev.http

@@ -1,9 +1,11 @@
-mod user;
-mod voice;
 mod flirting;
+pub mod user;
+mod voice;
 
-use std::{env, sync::Arc, collections::HashMap};
+use std::{collections::HashMap, env, sync::Arc};
 
+use actix::{Actor, Addr};
+use log::info;
 use user::{decay_loop, ButtplugUser, Decay, PowerSettings};
 use voice::register_events;
 
@@ -29,12 +31,20 @@ use serenity::{
 
 use songbird::{driver::DecodeMode, Config, SerenityInit};
 
+use self::flirting::{flirt_msg, ChannelContextManager};
+
 pub type ButtplugMap = Arc<RwLock<HashMap<UserId, Arc<Mutex<ButtplugUser>>>>>;
 
 struct ButtplugMapKey;
 
 impl TypeMapKey for ButtplugMapKey {
 	type Value = ButtplugMap;
+}
+
+struct ChannelContextManagerKey;
+
+impl TypeMapKey for ChannelContextManagerKey {
+	type Value = Addr<ChannelContextManager>;
 }
 
 struct PowerSettingsKey;
@@ -48,7 +58,6 @@ struct DatabaseKey;
 impl TypeMapKey for DatabaseKey {
 	type Value = Mutex<Connection>;
 }
-
 
 #[group]
 #[commands(ping, join, leave, stop, decay, settings)]
@@ -94,31 +103,12 @@ impl EventHandler for Handler {
 	}
 
 	async fn message(&self, ctx: Context, msg: Message) {
-		if msg.mentions.len() != 0 && GOOD_GIRL_REGEX.is_match(&msg.content) {
-			let count = GOOD_GIRL_REGEX.find_iter(&msg.content).count();
-			let data = ctx.data.read().await;
-			let settings = *data
-				.get::<PowerSettingsKey>()
-				.expect("Expected settings")
-				.read()
-				.await;
-			let map = data.get::<ButtplugMapKey>().expect("Expected buttplug map");
-			let lock = map.read().await;
-			let fut = msg
-				.mentions
-				.iter()
-				.filter_map(|u| lock.get(&u.id).map(|v| Arc::clone(v)))
-				.map(|v| async move {
-					let mut lock = v.lock().await;
-					lock.add_power(settings.praise_hit * (count as f64));
-				});
-
-			futures::future::join_all(fut).await;
-		}
+		flirt_msg(ctx, msg).await
 	}
 }
 
 pub async fn run_bot() -> Result<(), anyhow::Error> {
+	info!("Configuring discord bot");
 	let framework = StandardFramework::new()
 		.configure(|c| c.prefix("a!")) // set the bot's prefix to "a!"
 		.group(&GENERAL_GROUP);
@@ -133,11 +123,18 @@ pub async fn run_bot() -> Result<(), anyhow::Error> {
 		.register_songbird_from_config(songbird_config)
 		.await
 		.expect("Error creating client");
+	{
+		let mut data = client.data.write().await;
+		data.insert::<ButtplugMapKey>(Default::default());
+		data.insert::<PowerSettingsKey>(Default::default());
+		let manager = ChannelContextManager::default().start();
+		data.insert::<ChannelContextManagerKey>(manager);
+	}
 
-	let res: Result<(), anyhow::Error> = client.start().await.map_err(anyhow::Error::from);
-	res
+	info!("Starting discord bot");
+
+	client.start().await.map_err(anyhow::Error::from)
 }
-
 
 lazy_static! {
 	static ref WEB_SOCKET_REGEX : Regex = Regex::new(
@@ -186,7 +183,7 @@ async fn join(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
 	}
 	client.start_scanning().await.ok();
 	let data = ctx.data.read().await;
-	let victim = Arc::new(Mutex::new(ButtplugUser::new(client)));
+	let victim = Arc::new(Mutex::new(ButtplugUser::new())); //client
 	let map = data.get::<ButtplugMapKey>().unwrap();
 	let mut lock = map.write().await;
 	lock.insert(msg.author.id, Arc::clone(&victim));

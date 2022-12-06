@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use actix::prelude::*;
-use buttplug::client::{ButtplugClient, ButtplugClientError, VibrateCommand};
+use actix_buttplug::ButtplugContext;
+use async_scoped::TokioScope;
+use buttplug::client::{ButtplugClient, ButtplugClientError, ButtplugClientEvent, VibrateCommand};
 use regex::Regex;
 use tokio::{
 	sync::{Mutex, RwLock},
@@ -45,7 +47,25 @@ pub struct ButtplugUser {
 }
 
 impl Actor for ButtplugUser {
-	type Context = Context<Self>;
+	type Context = ButtplugContext<Self>;
+
+	fn started(&mut self, ctx: &mut Self::Context) {
+		println!("Started actor!");
+		ctx.run_interval(Duration::from_millis(1), |user, ctx| {
+			if !user.check_connected() {
+				ctx.stop();
+			} else {
+				let fut = user.decay_power(user.decay);
+				// While this is sus because it isn't an actor future,
+				// it is both scoped and blocking, so it should be fine :)
+				TokioScope::scope_and_block(|scope| scope.spawn(fut));
+			}
+		});
+	}
+}
+
+impl StreamHandler<ButtplugClientEvent> for ButtplugUser {
+	fn handle(&mut self, item: ButtplugClientEvent, ctx: &mut Self::Context) {}
 }
 
 enum Sustain {
@@ -55,10 +75,10 @@ enum Sustain {
 }
 
 impl ButtplugUser {
-	pub fn new(client: ButtplugClient) -> Self {
+	pub fn new() -> Self {
 		Self {
 			power: None,
-			client: Some(client),
+			client: None,
 			last_update: Instant::now(),
 			last_praise: Instant::now(),
 			voice_praisers: 0,
@@ -184,23 +204,6 @@ pub async fn decay_loop(victim: Arc<Mutex<ButtplugUser>>, settings: Arc<RwLock<P
 			let settings_lock = settings.read().await;
 			victim_lock.decay_power(settings_lock.decay).await;
 		}
-	}
-}
-
-struct DecayTick;
-
-impl Message for DecayTick {
-	type Result = ();
-}
-
-impl Handler<DecayTick> for ButtplugUser {
-	type Result = ();
-
-	fn handle(&mut self, msg: DecayTick, ctx: &mut Self::Context) -> Self::Result {
-		if self.check_connected() {
-			return;
-		}
-		let fut = self.decay_power(self.decay);
 	}
 }
 
