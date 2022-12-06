@@ -1,9 +1,9 @@
 import { AppBar, Avatar, Button, Container, IconButton, Menu, MenuItem, Paper, ThemeProvider, Toolbar, Typography } from "@mui/material";
 import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { discord } from "./themes";
+import { discord } from "app/themes";
 
-import { useLoginMutation, useMeQuery, User } from "../features/api-slice";
+import { useLoginMutation, useMeQuery, User } from "features/api-slice";
 
 const GuestHeader = () => {
 
@@ -64,7 +64,7 @@ const UserHeader: React.FC<{ user: User }> = ({ user }) => {
 					open={menuOpen}
 					onClose={() => setMenuOpen(false)}
 				>
-					<MenuItem>
+					<MenuItem component={Link} to="/settings">
 						Settings
 					</MenuItem>
 					<MenuItem>

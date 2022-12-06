@@ -7,7 +7,7 @@ import { store } from 'app/store';
 import { theme } from 'app/themes';
 import Header from 'app/Header';
 import Main from 'app/Main';
-import Settings from 'features/Settings';
+import Settings from 'features/settings/Settings';
 
 
 function App() {
