@@ -3,16 +3,14 @@ import { ThemeProvider } from '@mui/system';
 import { useState } from 'react'
 import { Provider } from 'react-redux';
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
-import { store } from './app/store';
-import { theme } from './app/themes';
-import Header from './app/Header';
-import Main from './app/Main';
-import Settings from './features/Settings';
+import { store } from 'app/store';
+import { theme } from 'app/themes';
+import Header from 'app/Header';
+import Main from 'app/Main';
+import Settings from 'features/Settings';
 
 
 function App() {
-	const [count, setCount] = useState(0)
-
 	return (
 		<Provider store={store}>
 			<ThemeProvider theme={theme}>

@@ -41,6 +41,7 @@ const UserHeader: React.FC<{ user: User }> = ({ user }) => {
 			<Toolbar>
 				<Typography
 					sx={{ flexGrow: 1 }}
+					variant="h4"
 					component={Link}
 					to="/"
 				>
@@ -91,9 +92,8 @@ const Header = () => {
 		})
 	}, [searchParam])
 
-	if (data === undefined) return <GuestHeader />
-	if (data.status === 'LoggedOut') return <GuestHeader />
-	if (data.status === 'LoggedIn') return <UserHeader user={data.user} />
+	if (data !== undefined && data.status === 'LoggedIn') return <UserHeader user={data.user} />
+	return <GuestHeader/>
 }
 
 export default Header;
