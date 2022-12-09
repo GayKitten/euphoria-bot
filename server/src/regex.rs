@@ -8,3 +8,15 @@ pub enum FlirtPattern {
 	Regex(String),
 	Words(Vec<String>),
 }
+
+impl FlirtPattern {
+	pub fn to_regex(&self) -> regex::Regex {
+		match self {
+			FlirtPattern::Regex(regex) => regex::Regex::new(regex).unwrap(),
+			FlirtPattern::Words(words) => {
+				let regex = words.join("|");
+				regex::Regex::new(&regex).unwrap()
+			}
+		}
+	}
+}

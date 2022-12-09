@@ -1439,6 +1439,7 @@ dependencies = [
  "buttplug",
  "chrono",
  "color-eyre",
+ "dashmap 5.4.0",
  "dotenv",
  "futures",
  "lazy_static",
@@ -1453,6 +1454,10 @@ dependencies = [
  "sqlx",
  "thiserror",
  "tokio",
+ "twilight-cache-inmemory",
+ "twilight-gateway",
+ "twilight-http",
+ "twilight-model",
 ]
 
 [[package]]
@@ -1503,6 +1508,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a8a2db397cb1c8772f31494cb8917e48cd1e64f0fa7efac59fbd741a0a8ce841"
 dependencies = [
  "crc32fast",
+ "libz-sys",
  "miniz_oxide 0.6.2",
 ]
 
@@ -1922,6 +1928,7 @@ dependencies = [
  "http",
  "hyper",
  "rustls 0.20.7",
+ "rustls-native-certs",
  "tokio",
  "tokio-rustls 0.23.4",
 ]
@@ -2137,6 +2144,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 
 [[package]]
+name = "leaky-bucket-lite"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1411c737dd21a748044ab29af14b7f920b2dcc277284df6dd986492c98bf5229"
+dependencies = [
+ "tokio",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.138"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2169,6 +2185,17 @@ checksum = "3c8469b4a23b962c1396b9b451dda50ef5b283e8dd309d69033475fa9b334324"
 dependencies = [
  "libc",
  "pkg-config",
+]
+
+[[package]]
+name = "libz-sys"
+version = "1.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9702761c3935f8cc2f101793272e202c72b99da8f4224a19ddcf1279a6450bbf"
+dependencies = [
+ "cc",
+ "pkg-config",
+ "vcpkg",
 ]
 
 [[package]]
@@ -2574,6 +2601,15 @@ dependencies = [
  "libc",
  "pkg-config",
  "vcpkg",
+]
+
+[[package]]
+name = "ordered-float"
+version = "2.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7940cf2ca942593318d07fcf2596cdca60a85c9e7fab408a5e21a4f9dcd40d87"
+dependencies = [
+ "num-traits 0.2.15",
 ]
 
 [[package]]
@@ -3134,6 +3170,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustls-native-certs"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0167bac7a9f490495f3c33013e7722b53cb087ecbe082fb0c6387c96f634ea50"
+dependencies = [
+ "openssl-probe",
+ "rustls-pemfile",
+ "schannel",
+ "security-framework",
+]
+
+[[package]]
 name = "rustls-pemfile"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3270,6 +3318,16 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "serde-value"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f3a1a3341211875ef120e117ea7fd5228530ae7e7036a779fdc9117be6b3282c"
+dependencies = [
+ "ordered-float",
+ "serde",
 ]
 
 [[package]]
@@ -3901,6 +3959,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-tungstenite"
+version = "0.17.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f714dd15bead90401d77e04243611caec13726c2408afd5b31901dfcdcb3b181"
+dependencies = [
+ "futures-util",
+ "log",
+ "rustls 0.20.7",
+ "rustls-native-certs",
+ "tokio",
+ "tokio-rustls 0.23.4",
+ "tungstenite 0.17.3",
+ "webpki 0.22.0",
+]
+
+[[package]]
 name = "tokio-util"
 version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4085,10 +4159,112 @@ dependencies = [
  "log",
  "native-tls",
  "rand 0.8.5",
+ "rustls 0.20.7",
  "sha-1 0.10.1",
  "thiserror",
  "url",
  "utf-8",
+ "webpki 0.22.0",
+]
+
+[[package]]
+name = "twilight-cache-inmemory"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e8a0eed837c0253f31636a70940ed5fa3d7c13cb981ef9a0cec50aa78461877b"
+dependencies = [
+ "bitflags",
+ "dashmap 5.4.0",
+ "serde",
+ "twilight-model",
+]
+
+[[package]]
+name = "twilight-gateway"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba43f8e8dc9f92f61c9ac4d339f7a8483c3ebef2b4f56fe62fb19e151dc79dae"
+dependencies = [
+ "bitflags",
+ "flate2",
+ "futures-util",
+ "leaky-bucket-lite",
+ "rustls 0.20.7",
+ "rustls-native-certs",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+ "twilight-gateway-queue",
+ "twilight-http",
+ "twilight-model",
+ "url",
+]
+
+[[package]]
+name = "twilight-gateway-queue"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "21c3de23d1819c451ea9963770115628e8f9376e23254e108c84ccf8adff1b21"
+dependencies = [
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "twilight-http"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6537962cfaaa433e18c4805e4d071ef175026bebaff933ce3109a467795e1512"
+dependencies = [
+ "brotli",
+ "hyper",
+ "hyper-rustls",
+ "percent-encoding",
+ "rand 0.8.5",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "twilight-http-ratelimiting",
+ "twilight-model",
+ "twilight-validate",
+]
+
+[[package]]
+name = "twilight-http-ratelimiting"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "65c4b3d51ada9826a7d4070374388769586f1b9fee81cf57ca2deb0f399cff5c"
+dependencies = [
+ "futures-util",
+ "http",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "twilight-model"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a3ccebf3a29754a19a0af5728bb0e5f1c86a3a379058ea233a09c8c67a62cd6e"
+dependencies = [
+ "bitflags",
+ "serde",
+ "serde-value",
+ "serde_repr",
+ "time 0.3.17",
+ "tracing",
+]
+
+[[package]]
+name = "twilight-validate"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c897f0cd4f73261b8a68724f9ae94795705f4473e7defeb0515890a435c691ce"
+dependencies = [
+ "twilight-model",
 ]
 
 [[package]]

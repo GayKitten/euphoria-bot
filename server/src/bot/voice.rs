@@ -11,7 +11,7 @@ use songbird::{
 
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
-use super::{user::ButtplugUser, ButtplugMap};
+use super::user::ButtplugUser;
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 enum VoiceEvent {
@@ -25,7 +25,7 @@ pub struct Voicecall {
 	ssrc_map: HashMap<u32, UserId>,
 	/// Buttplug map from UserId to Buttplug User.
 	/// Used to get the user's buttplug as they join VC.
-	map: ButtplugMap,
+	//map: ButtplugMap,
 	/// Buttplug users in the call.
 	victims: Vec<(UserId, Arc<Mutex<ButtplugUser>>)>,
 	/// Event receiver.
@@ -33,11 +33,11 @@ pub struct Voicecall {
 }
 
 impl Voicecall {
-	fn new(map: ButtplugMap) -> (Self, VoiceHandler) {
+	fn new(/*map: ButtplugMap*/) -> (Self, VoiceHandler) {
 		let (tx, rx) = unbounded_channel();
 		let vc = Voicecall {
 			ssrc_map: HashMap::default(),
-			map,
+			//map,
 			victims: Default::default(),
 			rx,
 		};
@@ -96,8 +96,8 @@ impl VoiceEventHandler for VoiceHandler {
 	}
 }
 
-pub fn register_events(call: &mut Call, map: ButtplugMap) {
-	let (vc, handler) = Voicecall::new(map);
+pub fn register_events(call: &mut Call /*, map: ButtplugMap */) {
+	let (vc, handler) = Voicecall::new();
 
 	call.add_global_event(CoreEvent::SpeakingStateUpdate.into(), handler.clone());
 

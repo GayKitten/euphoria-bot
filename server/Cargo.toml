@@ -32,3 +32,10 @@ thiserror = "1.0.31"
 actix-cors = "0.6.1"
 log = "0.4.17"
 pretty_env_logger = "0.4.0"
+
+# twilight
+twilight-gateway = "0.14.0"
+twilight-model = "0.14.0"
+twilight-http = "0.14.0"
+twilight-cache-inmemory = "0.14.0"
+dashmap = "5.4.0"

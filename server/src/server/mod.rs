@@ -1,7 +1,7 @@
 pub mod error;
 pub mod session;
 
-use std::{env, sync::Arc};
+use std::{env, str::FromStr, sync::Arc};
 
 use actix_session::{Session, SessionMiddleware};
 use error::{Error, Result};
@@ -15,14 +15,15 @@ use actix_web::{
 	App, HttpRequest, HttpResponse, HttpServer, Responder,
 };
 use anyhow::Error as AnyError;
-use log::info;
+use log::{info, warn};
 use serde::{Deserialize, Serialize};
 
 use actix_buttplug::ButtplugContext;
+use twilight_model::id::{marker::UserMarker, Id};
 
 use crate::{
-	bot::user::ButtplugUser,
 	manager::{Manager, User},
+	user::ButtplugUser,
 };
 
 #[get("/")]
@@ -31,20 +32,33 @@ async fn index() -> impl Responder {
 }
 
 #[get("/connect")]
-async fn connect(req: HttpRequest, stream: web::Payload) -> Result<HttpResponse> {
-	println!("GOT REQUEST");
+async fn connect(
+	req: HttpRequest,
+	stream: web::Payload,
+	ses: session::UserSession,
+	manager: Data<Manager>,
+) -> Result<HttpResponse> {
+	let id = ses.get_id()?;
+	let id = match id {
+		Some(id) => Id::from_str(&id).expect("User ID should be valid"),
+		None => return Ok(HttpResponse::Unauthorized().finish()),
+	};
 	let actor = ButtplugUser::new();
 	let res = ButtplugContext::start_with_actix_ws_transport(
 		actor,
 		"Euphoria",
 		&req,
 		stream,
-		|_| async {
-			info!("Connected!");
+		move |addr| async move {
+			if let Ok(addr) = addr {
+				info!("Connected!");
+				manager.insert(id, addr);
+			} else {
+				warn!("Failed to connect!");
+			}
 		},
 	)
 	.await?;
-	println!("SENDING RESPONSE");
 	Ok(res)
 }
 

@@ -13,8 +13,6 @@ use serenity::{
 	},
 };
 
-use super::{ButtplugMapKey, PowerSettingsKey, GOOD_GIRL_REGEX};
-
 /// If someone hasn't flirted inside the flirt window, the next implicit flirt doesn't count.
 const FLIRT_WINDOW: Duration = Duration::from_secs(300);
 

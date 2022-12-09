@@ -29,6 +29,10 @@ pub async fn setup_sessions() -> (RedisSessionStore, Key) {
 pub struct UserSession(pub Session);
 
 impl UserSession {
+	pub fn get_id(&self) -> Result<Option<String>> {
+		Ok(self.0.get::<String>("user")?)
+	}
+
 	pub async fn get_user(&self, manager: &Manager) -> Result<Option<User>> {
 		let id = match self.0.get::<String>("user")? {
 			Some(id) => id,
