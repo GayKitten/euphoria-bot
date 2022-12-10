@@ -1,8 +1,13 @@
+use std::{collections::HashMap, sync::Arc};
+
 use actix::prelude::*;
 use actix_buttplug::ButtplugContext;
-use buttplug::client::{ButtplugClientError, ButtplugClientEvent, VibrateCommand};
-use futures::future::join_all;
-use log::{error, info};
+use buttplug::client::{ButtplugClientDevice, ButtplugClientEvent, VibrateCommand};
+use futures::{
+	future::{join_all, BoxFuture},
+	Future,
+};
+use log::{error, warn};
 use regex::Regex;
 use tokio::time::{Duration, Instant};
 
@@ -12,6 +17,28 @@ pub enum Decay {
 	HalfLife(f64),
 	/// Time it takes to go from 1 to 0 in seconds
 	Linear(f64),
+}
+
+impl Decay {
+	fn decay_power(self, current: f64, delta: f64) -> Option<f64> {
+		match self {
+			Decay::HalfLife(hl) => {
+				if current < 1e-8 {
+					None
+				} else {
+					Some(current * (2.0 as f64).powf(-delta / hl))
+				}
+			}
+			Decay::Linear(time) => {
+				let next = current - delta / time;
+				if next <= 0.0 {
+					None
+				} else {
+					Some(next)
+				}
+			}
+		}
+	}
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -31,11 +58,115 @@ impl Default for PowerSettings {
 	}
 }
 
+enum DeviceFrame {
+	/// The device either only has one feature, or it has many features with similar characteristics
+	Simple {
+		device: Arc<ButtplugClientDevice>,
+		power: Option<f64>,
+		decay_handle: Option<SpawnHandle>,
+		step_count: u32,
+	},
+	// /// The device has a plethora of different features which need to be handled individually
+	// Complex {
+	// TODO
+	// },
+}
+
+fn step_count_to_interval(count: u32) -> f64 {
+	1.0 / (count as f64)
+}
+
+impl DeviceFrame {
+	fn set_decay(
+		&mut self,
+		ctx: &mut ButtplugContext<ButtplugUser>,
+		new_power: f64,
+		decay: Decay,
+	) -> Option<impl Future<Output = ()> + 'static> {
+		match self {
+			DeviceFrame::Simple {
+				device,
+				power,
+				decay_handle,
+				step_count,
+			} => {
+				if let Some(handle) = decay_handle.take() {
+					ctx.cancel_future(handle);
+				}
+				if new_power < 1e-8 {
+					*power = None;
+					return None;
+				}
+				let fut = device.vibrate(&VibrateCommand::Speed(new_power));
+				let fut = async move {
+					if let Err(e) = fut.await {
+						warn!("Failed to vibrate device: {}", e);
+					}
+				};
+				let next_step_power =
+					(new_power * *step_count as f64 - 1.0).ceil() / *step_count as f64;
+				let idx = device.index();
+				let time_til_next_step = match decay {
+					Decay::Linear(time) => {
+						let power_diff = new_power - next_step_power;
+						time * power_diff
+					}
+					Decay::HalfLife(hl) => {
+						let time_til_epsilon = hl * (new_power / 1e-8).log2();
+						let time_til_next_hl = hl * (new_power / next_step_power).log2();
+						time_til_epsilon.min(time_til_next_hl)
+					}
+				};
+				let handle = ctx.run_later(
+					Duration::from_secs_f64(time_til_next_step + 0.0001),
+					move |user, ctx| {
+						match user.devices.get_mut(&idx) {
+							Some(frame) => {
+								if let Some(fut) = frame.set_decay(ctx, next_step_power, decay) {
+									ctx.spawn(fut.into_actor(user));
+								}
+							}
+							None => return,
+						};
+					},
+				);
+				*decay_handle = Some(handle);
+				Some(fut)
+			}
+		}
+	}
+
+	fn stop_device(
+		&mut self,
+		ctx: &mut ButtplugContext<ButtplugUser>,
+	) -> impl Future<Output = ()> + 'static {
+		match self {
+			DeviceFrame::Simple {
+				device,
+				power,
+				decay_handle,
+				..
+			} => {
+				if let Some(handle) = decay_handle.take() {
+					ctx.cancel_future(handle);
+				}
+				let fut = device.stop();
+				let fut = async move {
+					if let Err(e) = fut.await {
+						warn!("Failed to stop device: {}", e);
+					}
+				};
+				*power = None;
+				fut
+			}
+		}
+	}
+}
+
 pub struct ButtplugUser {
 	power: Option<f64>,
-	last_update: Instant,
-	last_praise: Instant,
-	sustain: Sustain,
+	power_instant: Instant,
+	devices: HashMap<u32, DeviceFrame>,
 	decay: Decay,
 	regex: Regex,
 }
@@ -46,111 +177,95 @@ impl Actor for ButtplugUser {
 	fn started(&mut self, ctx: &mut Self::Context) {
 		println!("Started actor!");
 		let fut = ctx.start_scanning();
-
-		ctx.run_interval(Duration::from_millis(1), |user, ctx| {
-			let power = user.decay_power();
-			match power {
-				Power::Set(power) => {
-					let futs = ctx.devices().into_iter().map(move |d| async move {
-						if let Err(e) = d.vibrate(VibrateCommand::Speed(power)).await {
-							error!("Error vibrating device: {:?}", e)
-						}
-					});
-					let fut = async move {
-						join_all(futs).await;
-					};
-					ctx.spawn(fut.into_actor(user));
-				}
-				Power::Sustain => {}
-				Power::Off => {
-					ctx.stop_all_devices();
-				}
+		let fut = async move {
+			if let Err(e) = fut.await {
+				error!("Error starting scanning: {:?}", e)
 			}
-		});
+		};
+
+		ctx.spawn(fut.into_actor(self));
+
+		ctx.devices()
+			.into_iter()
+			.for_each(|device| self.add_device(ctx, device));
 	}
 }
 
 impl StreamHandler<ButtplugClientEvent> for ButtplugUser {
-	fn handle(&mut self, item: ButtplugClientEvent, ctx: &mut Self::Context) {}
-}
-
-enum Sustain {
-	Praised,
-	Praising,
-	Release,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum Power {
-	Set(f64),
-	Sustain,
-	Off,
+	fn handle(&mut self, item: ButtplugClientEvent, ctx: &mut Self::Context) {
+		match item {
+			ButtplugClientEvent::DeviceAdded(device) => self.add_device(ctx, device),
+			ButtplugClientEvent::DeviceRemoved(device) => {
+				self.devices.remove(&device.index());
+			}
+			ButtplugClientEvent::Error(e) => {
+				error!("Error: {:?}", e);
+			}
+			_ => {}
+		}
+	}
 }
 
 impl ButtplugUser {
 	pub fn new() -> Self {
 		Self {
 			power: None,
-			last_update: Instant::now(),
-			last_praise: Instant::now(),
-			sustain: Sustain::Release,
+			power_instant: Instant::now(),
+			devices: HashMap::new(),
 			decay: Decay::Linear(2.0),
 			regex: Regex::new("(?i)(?:good (?:girl|kitt(?:y|en))|treat|reward|praise|slut|cum)")
 				.unwrap(),
 		}
 	}
 
-	/// Decay power and send it to the server.
-	/// Return indicates if it should sustain.
-	fn decay_power(&mut self) -> Power {
-		let now = Instant::now();
-		let delta = now.duration_since(self.last_update).as_secs_f64();
-		self.last_update = now;
-		match self.sustain {
-			Sustain::Praising => {
-				self.sustain = Sustain::Praised;
-				self.last_praise = now;
-				return Power::Sustain;
-			}
-			Sustain::Praised => {
-				if self.last_praise.elapsed() >= Duration::from_secs(1) {
-					self.sustain = Sustain::Release;
+	fn add_device(&mut self, ctx: &mut ButtplugContext<Self>, device: Arc<ButtplugClientDevice>) {
+		let attributes = device.message_attributes();
+		if let Some(attrs) = attributes.scalar_cmd() {
+			let same_count = attrs
+				.windows(2)
+				.all(|w| w[0].step_count() == w[1].step_count());
+			match same_count {
+				true => {
+					let frame = DeviceFrame::Simple {
+						device: device.clone(),
+						decay_handle: None,
+						power: None,
+						step_count: *attrs[0].step_count(),
+					};
+					self.devices.insert(device.index(), frame);
 				}
-				return Power::Sustain;
+				false => {
+					warn!("Non uniform step counts not yet supported: {:?}", device);
+				}
 			}
-			Sustain::Release => {
-				// Continue
-			}
-		}
-		let current = match self.power {
-			Some(c) => c,
-			None => return Power::Sustain,
-		};
-		self.power = get_next_power(current, delta, self.decay);
-		match self.power {
-			Some(power) => Power::Set(power),
-			None => Power::Off,
+		} else {
+			warn!("Non scalar devices not yet supported: {:?}", device);
 		}
 	}
-}
 
-fn get_next_power(current: f64, delta: f64, decay: Decay) -> Option<f64> {
-	match decay {
-		Decay::HalfLife(hl) => {
-			if current < 1e-8 {
-				None
-			} else {
-				Some(current * (2.0 as f64).powf(-delta / hl))
-			}
-		}
-		Decay::Linear(time) => {
-			let next = current - delta / time;
-			if next <= 0.0 {
-				None
-			} else {
-				Some(next)
-			}
-		}
+	fn set_power(&mut self, ctx: &mut ButtplugContext<Self>, power: f64) {
+		self.power = Some(power);
+		self.power_instant = Instant::now();
+		let decay = self.decay;
+		let futs = self
+			.devices
+			.values_mut()
+			.filter_map(|d| d.set_decay(ctx, power, decay));
+		let fut = join_all(futs);
+		let fut = async {
+			fut.await;
+		};
+		ctx.spawn(fut.into_actor(self));
+	}
+
+	fn stop_devices(&mut self, ctx: &mut ButtplugContext<Self>) {
+		self.power = None;
+		let futs = self.devices.values_mut().map(|d| d.stop_device(ctx));
+		let fut = join_all(futs);
+		let fut = async {
+			fut.await;
+		};
+		ctx.spawn(fut.into_actor(self));
 	}
 }
 
@@ -165,18 +280,30 @@ impl Handler<Flirt> for ButtplugUser {
 
 	fn handle(&mut self, msg: Flirt, ctx: &mut Self::Context) -> Self::Result {
 		if self.regex.is_match(&msg.0) {
-			self.sustain = Sustain::Praising;
 			let new_power = self.power.unwrap_or(0.0) + 0.3;
 			self.power = Some(new_power);
-			let futs = ctx.devices().into_iter().map(move |d| async move {
-				if let Err(e) = d.vibrate(VibrateCommand::Speed(new_power)).await {
-					error!("Error vibrating device: {:?}", e)
-				}
-			});
-			let fut = async move {
-				join_all(futs).await;
-			};
-			ctx.spawn(fut.into_actor(self));
+			self.set_power(ctx, new_power);
 		}
+	}
+}
+
+pub struct SetDecay(pub Decay);
+
+impl Message for SetDecay {
+	type Result = ();
+}
+
+impl Handler<SetDecay> for ButtplugUser {
+	type Result = ();
+
+	fn handle(&mut self, msg: SetDecay, _ctx: &mut Self::Context) -> Self::Result {
+		if let Some(last_power) = self.power {
+			let now = Instant::now();
+			let delta = now.duration_since(self.power_instant).as_secs_f64();
+			self.power_instant = now;
+			let new_power = self.decay.decay_power(last_power, delta);
+			self.power = new_power;
+		}
+		self.decay = msg.0;
 	}
 }
