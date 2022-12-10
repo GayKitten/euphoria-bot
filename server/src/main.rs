@@ -55,7 +55,7 @@ fn main() -> Result<()> {
 
 		let discord_set = LocalSet::new();
 		let bot = discord_set
-			.spawn_local(run_bot(notify_term))
+			.spawn_local(run_bot(manager, notify_term))
 			.map_err(anyhow::Error::from);
 
 		info!("Starting backend");

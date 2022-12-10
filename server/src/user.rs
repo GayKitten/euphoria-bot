@@ -45,6 +45,8 @@ impl Actor for ButtplugUser {
 
 	fn started(&mut self, ctx: &mut Self::Context) {
 		println!("Started actor!");
+		let fut = ctx.start_scanning();
+
 		ctx.run_interval(Duration::from_millis(1), |user, ctx| {
 			let power = user.decay_power();
 			match power {
@@ -92,7 +94,7 @@ impl ButtplugUser {
 			last_update: Instant::now(),
 			last_praise: Instant::now(),
 			sustain: Sustain::Release,
-			decay: Decay::Linear(3.0),
+			decay: Decay::Linear(2.0),
 			regex: Regex::new("(?i)(?:good (?:girl|kitt(?:y|en))|treat|reward|praise|slut|cum)")
 				.unwrap(),
 		}
@@ -148,6 +150,33 @@ fn get_next_power(current: f64, delta: f64, decay: Decay) -> Option<f64> {
 			} else {
 				Some(next)
 			}
+		}
+	}
+}
+
+pub struct Flirt(pub String);
+
+impl Message for Flirt {
+	type Result = ();
+}
+
+impl Handler<Flirt> for ButtplugUser {
+	type Result = ();
+
+	fn handle(&mut self, msg: Flirt, ctx: &mut Self::Context) -> Self::Result {
+		if self.regex.is_match(&msg.0) {
+			self.sustain = Sustain::Praising;
+			let new_power = self.power.unwrap_or(0.0) + 0.3;
+			self.power = Some(new_power);
+			let futs = ctx.devices().into_iter().map(move |d| async move {
+				if let Err(e) = d.vibrate(VibrateCommand::Speed(new_power)).await {
+					error!("Error vibrating device: {:?}", e)
+				}
+			});
+			let fut = async move {
+				join_all(futs).await;
+			};
+			ctx.spawn(fut.into_actor(self));
 		}
 	}
 }

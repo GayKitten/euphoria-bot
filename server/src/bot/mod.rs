@@ -7,12 +7,18 @@ use futures::{FutureExt, StreamExt};
 use log::info;
 use tokio::{select, sync::Notify};
 use twilight_gateway::{Event, EventTypeFlags, Intents, Shard};
-use twilight_model::gateway::{
-	payload::outgoing::UpdatePresence,
-	presence::{Activity, ActivityType, MinimalActivity, Status},
+use twilight_model::{
+	channel::Message,
+	gateway::{
+		payload::outgoing::UpdatePresence,
+		presence::{Activity, ActivityType, MinimalActivity, Status},
+		GatewayReaction,
+	},
 };
 
-pub async fn run_bot(notify_term: Arc<Notify>) -> Result<(), anyhow::Error> {
+use crate::{manager::Manager, user::Flirt};
+
+pub async fn run_bot(manager: Arc<Manager>, notify_term: Arc<Notify>) -> Result<(), anyhow::Error> {
 	let intents =
 		Intents::GUILD_MESSAGES | Intents::MESSAGE_CONTENT | Intents::GUILD_MESSAGE_REACTIONS;
 	let event_types = EventTypeFlags::MESSAGE_CREATE | EventTypeFlags::REACTION_ADD;
@@ -57,7 +63,10 @@ pub async fn run_bot(notify_term: Arc<Notify>) -> Result<(), anyhow::Error> {
 			Some(event) = events.next() => {
 				match event {
 					Event::MessageCreate(message) => {
-						println!("Message: {}", message.content);
+						tokio::spawn(handle_message(message.0, manager.clone()));
+					}
+					Event::ReactionAdd(reaction) => {
+						tokio::spawn(handle_reaction(reaction.0, manager.clone()));
 					}
 					_ => {}
 				}
@@ -71,3 +80,18 @@ pub async fn run_bot(notify_term: Arc<Notify>) -> Result<(), anyhow::Error> {
 	}
 	Ok(())
 }
+
+async fn handle_message(message: Message, manager: Arc<Manager>) {
+	message
+		.mentions
+		.iter()
+		.filter_map(|mention| {
+			manager.get(mention.id).map(|a| {
+				info!("Brr-ing user: {}", mention.name);
+				a
+			})
+		})
+		.for_each(|user| user.do_send(Flirt(message.content.clone())));
+}
+
+async fn handle_reaction(reaction: GatewayReaction, manager: Arc<Manager>) {}
