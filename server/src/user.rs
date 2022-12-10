@@ -282,8 +282,26 @@ impl Handler<Flirt> for ButtplugUser {
 		if self.regex.is_match(&msg.0) {
 			let new_power = self.power.unwrap_or(0.0) + 0.3;
 			self.power = Some(new_power);
+			self.power_instant = Instant::now();
 			self.set_power(ctx, new_power);
 		}
+	}
+}
+
+pub struct Reaction;
+
+impl Message for Reaction {
+	type Result = ();
+}
+
+impl Handler<Reaction> for ButtplugUser {
+	type Result = ();
+
+	fn handle(&mut self, _msg: Reaction, ctx: &mut Self::Context) -> Self::Result {
+		let new_power = self.power.unwrap_or(0.0) + 0.3;
+		self.power = Some(new_power);
+		self.power_instant = Instant::now();
+		self.set_power(ctx, new_power);
 	}
 }
 

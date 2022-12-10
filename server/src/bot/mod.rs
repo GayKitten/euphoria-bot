@@ -1,10 +1,11 @@
 //mod flirting;
 //mod voice;
+mod cache;
 
 use std::{env, sync::Arc};
 
 use futures::{FutureExt, StreamExt};
-use log::info;
+use log::{info, warn};
 use tokio::{select, sync::Notify};
 use twilight_gateway::{Event, EventTypeFlags, Intents, Shard};
 use twilight_model::{
@@ -16,7 +17,12 @@ use twilight_model::{
 	},
 };
 
-use crate::{manager::Manager, user::Flirt};
+use crate::{
+	manager::Manager,
+	user::{Flirt, Reaction},
+};
+
+use self::cache::Cache;
 
 pub async fn run_bot(manager: Arc<Manager>, notify_term: Arc<Notify>) -> Result<(), anyhow::Error> {
 	let intents =
@@ -24,6 +30,12 @@ pub async fn run_bot(manager: Arc<Manager>, notify_term: Arc<Notify>) -> Result<
 	let event_types = EventTypeFlags::MESSAGE_CREATE | EventTypeFlags::REACTION_ADD;
 
 	let token = env::var("DISCORD_TOKEN").expect("missing DISCORD_TOKEN var");
+
+	let client = Arc::new(twilight_http::Client::new(token.clone()));
+
+	let im_cache = Arc::new(twilight_cache_inmemory::InMemoryCache::new());
+
+	let cache = Arc::new(Cache::new(im_cache.clone(), client.clone()));
 
 	let (shard, mut events) = Shard::builder(token, intents)
 		.event_types(event_types)
@@ -61,12 +73,13 @@ pub async fn run_bot(manager: Arc<Manager>, notify_term: Arc<Notify>) -> Result<
 	loop {
 		select! {
 			Some(event) = events.next() => {
+				im_cache.update(&event);
 				match event {
 					Event::MessageCreate(message) => {
 						tokio::spawn(handle_message(message.0, manager.clone()));
 					}
 					Event::ReactionAdd(reaction) => {
-						tokio::spawn(handle_reaction(reaction.0, manager.clone()));
+						tokio::spawn(handle_reaction(reaction.0, cache.clone(), manager.clone()));
 					}
 					_ => {}
 				}
@@ -94,4 +107,17 @@ async fn handle_message(message: Message, manager: Arc<Manager>) {
 		.for_each(|user| user.do_send(Flirt(message.content.clone())));
 }
 
-async fn handle_reaction(reaction: GatewayReaction, manager: Arc<Manager>) {}
+async fn handle_reaction(reaction: GatewayReaction, cache: Arc<Cache>, manager: Arc<Manager>) {
+	let channel_id = reaction.channel_id;
+	let message_id = reaction.message_id;
+	let author = match cache.get_author(message_id, channel_id).await {
+		Ok(author) => author,
+		Err(why) => {
+			warn!("Failed to get author: {}", why);
+			return;
+		}
+	};
+	if let Some(user) = manager.get(author) {
+		user.do_send(Reaction);
+	}
+}
